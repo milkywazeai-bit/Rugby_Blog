@@ -18,6 +18,7 @@ Notes:
       unless --overwrite is passed.
 """
 import argparse
+import html
 import json
 import re
 import sys
@@ -36,7 +37,10 @@ HEADERS = {
     )
 }
 
-IHERB_LINK_RE = re.compile(r"https?://(?:www\.)?iherb\.com/[^\s\"'<>)\]]+", re.IGNORECASE)
+# Covers both the full domain (iherb.com) and iHerb's short-link domain
+# (iherb.co, used for affiliate/referral links in blog posts).
+IHERB_LINK_RE = re.compile(r"https?://(?:www\.|kr\.)?iherb\.co(?:m)?/[^\s\"'<>)\]]*", re.IGNORECASE)
+IHERB_PRODUCT_PATH_RE = re.compile(r"/pr/[^/\s\"'<>]+/\d+", re.IGNORECASE)
 
 
 def slugify(text: str, max_len: int = 60) -> str:
@@ -122,13 +126,12 @@ def extract_post_content(session: requests.Session, blog_id: str, log_no: str):
     body_text = content_el.get_text("\n", strip=True) if content_el else ""
 
     # iHerb links can appear as real <a href> targets or as plain visible text.
-    html_str = str(content_el) if content_el else resp.text
-    links = set(IHERB_LINK_RE.findall(html_str))
+    links = set(IHERB_LINK_RE.findall(html.unescape(body_text)))
     if content_el:
         for a in content_el.select("a[href]"):
             href = a["href"]
-            if "iherb.com" in href:
-                links.add(urljoin(url, href))
+            if "iherb.co" in href:
+                links.add(urljoin(url, html.unescape(href)))
 
     return {
         "log_no": log_no,
@@ -140,14 +143,7 @@ def extract_post_content(session: requests.Session, blog_id: str, log_no: str):
     }
 
 
-def fetch_iherb_product(session: requests.Session, url: str):
-    try:
-        resp = fetch(session, url, allow_redirects=True)
-    except requests.RequestException as exc:
-        return {"url": url, "final_url": url, "name": None, "description": None, "error": str(exc)}
-
-    soup = BeautifulSoup(resp.text, "lxml")
-
+def _extract_meta(soup: BeautifulSoup):
     name = None
     og_title = soup.select_one("meta[property='og:title']")
     if og_title and og_title.get("content"):
@@ -163,13 +159,63 @@ def fetch_iherb_product(session: requests.Session, url: str):
     elif meta_desc and meta_desc.get("content"):
         description = meta_desc["content"].strip()
 
-    return {
-        "url": url,
-        "final_url": resp.url,
-        "name": name,
-        "description": description,
-        "error": None,
-    }
+    return name, description
+
+
+def fetch_iherb_product(session: requests.Session, url: str):
+    """Resolve an iHerb link (often an affiliate short link) to product info.
+
+    Short links frequently land on a cart/checkout page rather than a
+    product detail page. In that case, look for actual product-detail links
+    (the canonical /pr/<slug>/<id> path) on the landing page and fetch each
+    of those individually instead of trusting the cart page's generic meta
+    tags.
+    """
+    try:
+        resp = fetch(session, url, allow_redirects=True)
+    except requests.RequestException as exc:
+        return [{"url": url, "final_url": url, "name": None, "description": None,
+                  "is_product_page": False, "error": str(exc)}]
+
+    soup = BeautifulSoup(resp.text, "lxml")
+
+    if IHERB_PRODUCT_PATH_RE.search(resp.url):
+        name, description = _extract_meta(soup)
+        return [{
+            "url": url, "final_url": resp.url, "name": name,
+            "description": description, "is_product_page": True, "error": None,
+        }]
+
+    # Not a direct product page (e.g. cart/checkout/homepage) - look for
+    # actual product links on the landing page instead.
+    product_urls = set()
+    for a in soup.select("a[href]"):
+        href = urljoin(resp.url, a["href"])
+        if IHERB_PRODUCT_PATH_RE.search(href):
+            product_urls.add(href.split("?")[0])
+
+    if not product_urls:
+        name, description = _extract_meta(soup)
+        return [{
+            "url": url, "final_url": resp.url, "name": name,
+            "description": description, "is_product_page": False, "error": None,
+        }]
+
+    results = []
+    for product_url in sorted(product_urls):
+        try:
+            presp = fetch(session, product_url, allow_redirects=True)
+            pname, pdesc = _extract_meta(BeautifulSoup(presp.text, "lxml"))
+            results.append({
+                "url": url, "final_url": presp.url, "name": pname,
+                "description": pdesc, "is_product_page": True, "error": None,
+            })
+        except requests.RequestException as exc:
+            results.append({
+                "url": url, "final_url": product_url, "name": None,
+                "description": None, "is_product_page": False, "error": str(exc),
+            })
+    return results
 
 
 def render_markdown(post: dict, products: list) -> str:
@@ -190,7 +236,10 @@ def render_markdown(post: dict, products: list) -> str:
         lines.append("## 참고 - 언급된 iHerb 제품")
         for p in products:
             lines.append("")
-            lines.append(f"### {p['name'] or '(제품명 확인 불가)'}")
+            if p.get("is_product_page"):
+                lines.append(f"### {p['name'] or '(제품명 확인 불가)'}")
+            else:
+                lines.append(f"### (제품 페이지 아님) {p['name'] or ''}")
             lines.append(f"- 링크: {p['final_url']}")
             if p.get("description"):
                 lines.append(f"- 설명: {p['description']}")
@@ -232,10 +281,15 @@ def main():
             print(f"[error] failed to fetch post {log_no}: {exc}", file=sys.stderr)
             continue
 
+        seen_urls = set()
         products = []
         for link in post["iherb_links"]:
             time.sleep(args.delay)
-            products.append(fetch_iherb_product(session, link))
+            for product in fetch_iherb_product(session, link):
+                if product["final_url"] in seen_urls:
+                    continue
+                seen_urls.add(product["final_url"])
+                products.append(product)
 
         md = render_markdown(post, products)
         filename = f"{log_no}-{slugify(post['title'])}.md"

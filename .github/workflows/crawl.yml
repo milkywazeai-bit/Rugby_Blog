@@ -13,7 +13,9 @@ jobs:
   crawl:
     runs-on: ubuntu-latest
     env:
-      GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
+      GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+      GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+      GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
       GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
     steps:
       - uses: actions/checkout@v4
@@ -29,11 +31,14 @@ jobs:
         run: python crawler.py --blog-id skckckskckck --out posts
 
       - name: Sync new posts to Google Drive
-        if: ${{ env.GDRIVE_SA_KEY != '' && env.GDRIVE_FOLDER_ID != '' }}
+        if: ${{ env.GDRIVE_REFRESH_TOKEN != '' && env.GDRIVE_FOLDER_ID != '' }}
         run: |
-          echo "$GDRIVE_SA_KEY" > /tmp/gdrive-key.json
-          python sync_to_drive.py --key-file /tmp/gdrive-key.json --folder-id "$GDRIVE_FOLDER_ID" --source posts
-          rm -f /tmp/gdrive-key.json
+          python sync_to_drive.py \
+            --client-id "$GDRIVE_CLIENT_ID" \
+            --client-secret "$GDRIVE_CLIENT_SECRET" \
+            --refresh-token "$GDRIVE_REFRESH_TOKEN" \
+            --folder-id "$GDRIVE_FOLDER_ID" \
+            --source posts
 
       - name: Commit new posts
         run: |

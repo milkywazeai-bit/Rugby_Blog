@@ -46,3 +46,34 @@ source_url: ...
 - 이미 크롤링된 글은 재실행 시 건너뛰므로 중간에 끊겨도 이어서 실행할 수 있습니다.
 - 네트워크가 제한된 환경(예: naver.com/iherb.com 접근이 차단된 샌드박스)에서는 동작하지 않습니다.
   일반 인터넷이 열려 있는 로컬 PC에서 실행하세요.
+
+## 자동화 (GitHub Actions)
+
+`.github/workflows/crawl.yml`이 매일 자동으로 크롤러를 실행해서 새 글만 찾아 커밋합니다.
+수동 실행은 저장소의 Actions 탭 → "Crawl Naver blog posts" → Run workflow.
+
+### Google Drive 자동 업로드 (선택)
+
+새로 크롤링된 글을 Google Drive 폴더에도 자동 업로드해서, NotebookLM이 그 폴더를 소스로
+구독해두면 새로고침만으로 새 글을 반영할 수 있게 합니다.
+
+Drive API는 서비스 계정에 저장 용량이 없어서(개인 Gmail 기준), 서비스 계정이 아니라
+**본인 계정 권한(OAuth)** 으로 업로드합니다. 설정 순서:
+
+1. Google Cloud Console → OAuth 동의 화면 설정 (User type: 외부, 본인을 테스트 사용자로 추가)
+2. 사용자 인증 정보 → OAuth 클라이언트 ID 만들기 → 애플리케이션 유형: **데스크톱 앱** → JSON 다운로드
+3. 로컬(또는 Termux)에서 1회 실행:
+   ```bash
+   pip install google-auth-oauthlib
+   python get_drive_refresh_token.py --client-secrets client_secret.json
+   ```
+   출력된 URL을 브라우저에서 열어 로그인/승인하면 `GDRIVE_CLIENT_ID`, `GDRIVE_CLIENT_SECRET`,
+   `GDRIVE_REFRESH_TOKEN` 값이 출력됩니다.
+4. Drive에 폴더를 만들고 그 폴더 ID(`drive.google.com/drive/folders/<ID>`)를 확인
+5. GitHub 저장소 → Settings → Secrets and variables → Actions 에 등록:
+   - `GDRIVE_CLIENT_ID`
+   - `GDRIVE_CLIENT_SECRET`
+   - `GDRIVE_REFRESH_TOKEN`
+   - `GDRIVE_FOLDER_ID`
+
+네 개 시크릿이 모두 등록되면 다음 실행부터 새 글이 그 Drive 폴더에 자동 업로드됩니다.

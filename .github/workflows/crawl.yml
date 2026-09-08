@@ -25,6 +25,16 @@ jobs:
       - name: Run crawler
         run: python crawler.py --blog-id skckckskckck --out posts
 
+      - name: Sync new posts to Google Drive
+        if: ${{ secrets.GDRIVE_SA_KEY != '' && secrets.GDRIVE_FOLDER_ID != '' }}
+        env:
+          GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+        run: |
+          echo "$GDRIVE_SA_KEY" > /tmp/gdrive-key.json
+          python sync_to_drive.py --key-file /tmp/gdrive-key.json --folder-id "$GDRIVE_FOLDER_ID" --source posts
+          rm -f /tmp/gdrive-key.json
+
       - name: Commit new posts
         run: |
           git config user.name "github-actions[bot]"

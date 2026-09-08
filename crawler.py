@@ -25,7 +25,7 @@ import sys
 import time
 import unicodedata
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -162,14 +162,24 @@ def _extract_meta(soup: BeautifulSoup):
     return name, description
 
 
+MAX_FALLBACK_LINKS = 5
+
+
+def _pcode_from_url(url: str):
+    query = parse_qs(urlparse(url).query)
+    values = query.get("pcode") or query.get("pid")
+    return values[0] if values and values[0] else None
+
+
 def fetch_iherb_product(session: requests.Session, url: str):
     """Resolve an iHerb link (often an affiliate short link) to product info.
 
-    Short links frequently land on a cart/checkout page rather than a
-    product detail page. In that case, look for actual product-detail links
-    (the canonical /pr/<slug>/<id> path) on the landing page and fetch each
-    of those individually instead of trusting the cart page's generic meta
-    tags.
+    Short links commonly land on a cart/checkout page rather than a product
+    detail page. When that happens, prefer the `pcode` query parameter
+    (iHerb's product code, present on cart/checkout redirects) to jump
+    straight to the canonical product page. Only if that's unavailable do we
+    fall back to scanning the landing page for product-detail links, capped
+    to avoid pulling in unrelated "recommended products" carousels.
     """
     try:
         resp = fetch(session, url, allow_redirects=True)
@@ -177,22 +187,44 @@ def fetch_iherb_product(session: requests.Session, url: str):
         return [{"url": url, "final_url": url, "name": None, "description": None,
                   "is_product_page": False, "error": str(exc)}]
 
-    soup = BeautifulSoup(resp.text, "lxml")
-
     if IHERB_PRODUCT_PATH_RE.search(resp.url):
-        name, description = _extract_meta(soup)
+        name, description = _extract_meta(BeautifulSoup(resp.text, "lxml"))
         return [{
             "url": url, "final_url": resp.url, "name": name,
             "description": description, "is_product_page": True, "error": None,
         }]
 
-    # Not a direct product page (e.g. cart/checkout/homepage) - look for
-    # actual product links on the landing page instead.
-    product_urls = set()
-    for a in soup.select("a[href]"):
-        href = urljoin(resp.url, a["href"])
-        if IHERB_PRODUCT_PATH_RE.search(href):
-            product_urls.add(href.split("?")[0])
+    # Not a direct product page (e.g. cart/checkout/homepage). Try the
+    # pcode query param first - it identifies the specific product that was
+    # added to the cart, and avoids picking up unrelated carousel links.
+    pcode = _pcode_from_url(url) or _pcode_from_url(resp.url)
+    if pcode:
+        try:
+            presp = fetch(session, f"https://www.iherb.com/pr/-/{pcode}", allow_redirects=True)
+            if IHERB_PRODUCT_PATH_RE.search(presp.url):
+                pname, pdesc = _extract_meta(BeautifulSoup(presp.text, "lxml"))
+                return [{
+                    "url": url, "final_url": presp.url, "name": pname,
+                    "description": pdesc, "is_product_page": True, "error": None,
+                }]
+        except requests.RequestException:
+            pass
+
+    soup = BeautifulSoup(resp.text, "lxml")
+
+    # Last resort: scan the landing page for product-detail links, but only
+    # inside a cart/checkout-looking container if one exists, and cap the
+    # count so a generic homepage doesn't dump dozens of unrelated products.
+    container = soup.select_one("[class*='cart' i], [id*='cart' i]") or soup
+    product_urls = []
+    seen = set()
+    for a in container.select("a[href]"):
+        href = urljoin(resp.url, a["href"]).split("?")[0]
+        if IHERB_PRODUCT_PATH_RE.search(href) and href not in seen:
+            seen.add(href)
+            product_urls.append(href)
+        if len(product_urls) >= MAX_FALLBACK_LINKS:
+            break
 
     if not product_urls:
         name, description = _extract_meta(soup)
@@ -202,7 +234,7 @@ def fetch_iherb_product(session: requests.Session, url: str):
         }]
 
     results = []
-    for product_url in sorted(product_urls):
+    for product_url in product_urls:
         try:
             presp = fetch(session, product_url, allow_redirects=True)
             pname, pdesc = _extract_meta(BeautifulSoup(presp.text, "lxml"))

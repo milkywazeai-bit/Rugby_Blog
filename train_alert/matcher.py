@@ -13,8 +13,9 @@ STANDBY = "standby"
 
 @dataclass
 class TrainView:
-    """SRTTrain을 알림/화면에서 쓰기 좋은 형태로 정리한 것."""
+    """제공자(코레일/SRT)에 상관없이 알림·화면에서 쓰는 공통 형태."""
 
+    train_name: str
     train_number: str
     dep_time: str
     arr_time: str
@@ -46,10 +47,11 @@ class TrainView:
         return f"{fmt_time(self.dep_time)}→{fmt_time(self.arr_time)}"
 
     def line(self) -> str:
-        return f"{self.time_label}  SRT {self.train_number}  {self.seat_label}"
+        return f"{self.time_label}  {self.train_name} {self.train_number}  {self.seat_label}"
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "train_name": self.train_name,
             "train_number": self.train_number,
             "dep_time": fmt_time(self.dep_time),
             "arr_time": fmt_time(self.arr_time),
@@ -88,32 +90,15 @@ class LegResult:
         }
 
 
-def to_view(train: Any) -> TrainView:
-    """SRTTrain(또는 같은 인터페이스를 가진 객체) -> TrainView."""
-    return TrainView(
-        train_number=str(train.train_number),
-        dep_time=str(train.dep_time),
-        arr_time=str(train.arr_time),
-        dep_station=str(train.dep_station_name),
-        arr_station=str(train.arr_station_name),
-        general_state=str(train.general_seat_state),
-        special_state=str(train.special_seat_state),
-        general_available=bool(train.general_seat_available()),
-        special_available=bool(train.special_seat_available()),
-        standby_available=bool(train.reserve_standby_available()),
-    )
-
-
 def in_window(view: TrainView, leg: Leg) -> bool:
     return leg.time_from <= view.dep_time <= leg.time_to
 
 
 def build_result(
-    leg: Leg, trains: Iterable[Any], notify_standby: bool = False
+    leg: Leg, trains: Iterable[TrainView], notify_standby: bool = False
 ) -> LegResult:
     """조회된 열차들을 시간대로 거른 뒤 좌석/예약대기 후보를 분류한다."""
-    views = [to_view(t) for t in trains]
-    views = [v for v in views if in_window(v, leg)]
+    views = [v for v in trains if in_window(v, leg)]
     views.sort(key=lambda v: v.dep_time)
 
     result = LegResult(leg=leg, trains=views)

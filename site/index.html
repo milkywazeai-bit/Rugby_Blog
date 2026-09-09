@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#0b1220">
-<title>SRT 취소표 감시</title>
+<title>기차표 취소표 감시</title>
 <style>
   :root {
     --bg: #f4f6fb;
@@ -98,13 +98,13 @@
 <body>
 <main>
   <header>
-    <h1>SRT 취소표 감시</h1>
+    <h1>기차표 취소표 감시</h1>
     <p class="sub" id="updated">불러오는 중…</p>
   </header>
 
   <div id="legs"></div>
 
-  <a class="cta" id="book" href="https://app.srail.or.kr/main/main.do">SRT 예매 화면 열기</a>
+  <a class="cta" id="book" href="https://www.korail.com/ticket/main">코레일 예매 화면 열기</a>
 
   <footer>
     좌석이 열리면 휴대폰으로 알림이 갑니다 · 이 화면은 60초마다 새로고침됩니다
@@ -125,7 +125,7 @@ function legCard(leg) {
   const rows = leg.trains.map(t => `
     <tr>
       <td class="time">${t.dep_time} → ${t.arr_time}</td>
-      <td class="no">SRT ${t.train_number}</td>
+      <td class="no">${escapeHtml(t.train_name || "")} ${t.train_number}</td>
       <td class="right">${badge(t)}</td>
     </tr>`).join('');
 

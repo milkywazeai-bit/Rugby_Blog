@@ -1,9 +1,11 @@
 {
+  "provider": "korail",
   "renotify_minutes": 120,
   "notify_standby": false,
   "seat_count_filter": true,
   "interval_seconds": 90,
   "loop_minutes": 0,
+  "booking_url": "https://www.korail.com/ticket/main",
   "legs": [
     {
       "id": "go",
@@ -13,7 +15,8 @@
       "date": "20260924",
       "time_from": "05:00",
       "time_to": "11:59",
-      "adults": 2
+      "adults": 2,
+      "train_type": "KTX"
     },
     {
       "id": "back",
@@ -23,7 +26,8 @@
       "date": "20260927",
       "time_from": "16:00",
       "time_to": "19:00",
-      "adults": 2
+      "adults": 2,
+      "train_type": "KTX"
     }
   ]
 }

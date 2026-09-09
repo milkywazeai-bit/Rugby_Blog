@@ -1,4 +1,4 @@
-name: SRT 취소표 감시
+name: 기차표 취소표 감시
 
 on:
   schedule:
@@ -31,6 +31,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      # 조회 대상: korail(기본) / srt(통합 전 시스템, 레거시)
+      PROVIDER: ${{ vars.PROVIDER || 'korail' }}
+      # 코레일이 오래된 앱 버전을 거부하면 이 변수로 올린다
+      KORAIL_APP_VERSION: ${{ vars.KORAIL_APP_VERSION }}
       SRT_ID: ${{ secrets.SRT_ID }}
       SRT_PW: ${{ secrets.SRT_PW }}
       NTFY_SERVER: ${{ secrets.NTFY_SERVER || 'https://ntfy.sh' }}
@@ -96,7 +100,7 @@ jobs:
       - name: 조회 실패 시 실패로 표시
         if: steps.watch.outcome == 'failure'
         run: |
-          echo "::error::모든 구간 조회에 실패했습니다. 로그와 SRT 차단 여부를 확인하세요."
+          echo "::error::모든 구간 조회에 실패했습니다. 로그와 차단 여부를 확인하세요."
           exit 1
 
   deploy:

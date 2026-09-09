@@ -1,4 +1,8 @@
-"""SRT 조회 래퍼.
+"""SRT 조회 래퍼 (레거시).
+
+2026년 9월 코레일-SR 통합으로 수서 출발 고속열차는 KTX로 통합 운행되고 예매도
+코레일로 일원화되었다. 기존 SRT 앱/시스템이 살아 있는 동안의 대비책으로만 남겨둔다.
+평상시에는 `korail_client`를 쓴다.
 
 `SRTrain` 라이브러리를 쓰되,
   * 로그인 정보가 없으면 비로그인으로 조회를 시도하고
@@ -15,7 +19,8 @@ from SRT import SRT
 from SRT.errors import SRTError, SRTLoginError, SRTResponseError
 
 from .config import Leg
-from .errors import SrtSearchError
+from .errors import SearchError
+from .matcher import TrainView
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +35,8 @@ EMPTY_RESULT_HINTS = (
 
 class SrtSearcher:
     """로그인 세션을 재사용하면서 여러 구간을 반복 조회한다."""
+
+    name = "srt"
 
     def __init__(
         self,
@@ -63,12 +70,12 @@ class SrtSearcher:
         """다음 조회 때 세션을 새로 만들도록 한다."""
         self._srt = None
 
-    def search(self, leg: Leg, seat_count_filter: bool = True) -> list[Any]:
+    def search(self, leg: Leg, seat_count_filter: bool = True) -> list[TrainView]:
         """구간 하나를 조회한다. 결과가 없으면 빈 리스트."""
         try:
             return self._search_once(leg, seat_count_filter)
         except SRTLoginError as exc:
-            raise SrtSearchError(f"SRT 로그인 실패: {exc}") from exc
+            raise SearchError(f"SRT 로그인 실패: {exc}") from exc
         except SRTResponseError as exc:
             message = str(exc)
             if any(hint in message for hint in EMPTY_RESULT_HINTS):
@@ -76,19 +83,19 @@ class SrtSearcher:
                 return []
             # 세션이 만료된 경우가 많아 다음 회차에는 새 세션으로 붙는다.
             self.reset()
-            raise SrtSearchError(f"SRT 응답 오류: {message}") from exc
+            raise SearchError(f"SRT 응답 오류: {message}") from exc
         except SRTError as exc:
             self.reset()
-            raise SrtSearchError(f"SRT 오류: {exc}") from exc
+            raise SearchError(f"SRT 오류: {exc}") from exc
         except Exception as exc:  # 네트워크 끊김 등
             self.reset()
-            raise SrtSearchError(f"조회 실패: {exc!r}") from exc
+            raise SearchError(f"조회 실패: {exc!r}") from exc
 
-    def _search_once(self, leg: Leg, seat_count_filter: bool) -> list[Any]:
+    def _search_once(self, leg: Leg, seat_count_filter: bool) -> list[TrainView]:
         srt = self.client()
         passengers = leg.adults if seat_count_filter else 1
         with _passenger_count(srt, passengers):
-            return srt.search_train(
+            trains = srt.search_train(
                 dep=leg.dep,
                 arr=leg.arr,
                 date=leg.date,
@@ -96,6 +103,24 @@ class SrtSearcher:
                 time_limit=leg.time_to,
                 available_only=False,
             )
+        return [to_view(train) for train in trains]
+
+
+def to_view(train: Any) -> TrainView:
+    """SRTTrain -> 공통 TrainView."""
+    return TrainView(
+        train_name=str(train.train_name),
+        train_number=str(train.train_number),
+        dep_time=str(train.dep_time),
+        arr_time=str(train.arr_time),
+        dep_station=str(train.dep_station_name),
+        arr_station=str(train.arr_station_name),
+        general_state=str(train.general_seat_state),
+        special_state=str(train.special_seat_state),
+        general_available=bool(train.general_seat_available()),
+        special_available=bool(train.special_seat_available()),
+        standby_available=bool(train.reserve_standby_available()),
+    )
 
 
 class _passenger_count:

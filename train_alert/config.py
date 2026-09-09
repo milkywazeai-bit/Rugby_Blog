@@ -61,6 +61,7 @@ class Leg:
     time_from: str = "000000"
     time_to: str = "235959"
     adults: int = 1
+    train_type: str = "KTX"
     label: str = ""
     enabled: bool = True
 
@@ -107,6 +108,8 @@ class Leg:
 @dataclass
 class Config:
     legs: list[Leg] = field(default_factory=list)
+    #: 조회 대상. "korail"(기본) 또는 "srt"(통합 전 예매 시스템, 레거시)
+    provider: str = "korail"
     #: 같은 열차를 다시 알릴 때까지의 최소 간격(분)
     renotify_minutes: int = 120
     #: 매진이지만 '예약대기'가 열린 열차도 알릴지
@@ -117,8 +120,8 @@ class Config:
     interval_seconds: int = 90
     #: 한 프로세스 안에서 반복 조회할 시간(분). 0이면 1회만 조회
     loop_minutes: int = 0
-    #: SRT 예매 화면 링크 (알림 클릭 시 이동)
-    booking_url: str = "https://app.srail.or.kr/main/main.do"
+    #: 예매 화면 링크 (알림 클릭 시 이동)
+    booking_url: str = "https://www.korail.com/ticket/main"
 
     @property
     def active_legs(self) -> list[Leg]:
@@ -159,6 +162,7 @@ def load_config(path: str | Path | None = None) -> Config:
 
     cfg = Config(
         legs=legs,
+        provider=raw.get("provider", "korail"),
         renotify_minutes=raw.get("renotify_minutes", 120),
         notify_standby=raw.get("notify_standby", False),
         seat_count_filter=raw.get("seat_count_filter", True),
@@ -172,4 +176,5 @@ def load_config(path: str | Path | None = None) -> Config:
     cfg.interval_seconds = _env_int("INTERVAL_SECONDS", cfg.interval_seconds)
     cfg.loop_minutes = _env_int("LOOP_MINUTES", cfg.loop_minutes)
     cfg.notify_standby = _env_bool("NOTIFY_STANDBY", cfg.notify_standby)
+    cfg.provider = os.environ.get("PROVIDER", "").strip().lower() or cfg.provider
     return cfg

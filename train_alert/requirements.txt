@@ -1,2 +1,3 @@
-SRTrain>=2.6.7
 requests>=2.31.0
+# SRT 조회 (통합 전 예매 시스템 — 레거시 대비책). 코레일 조회는 requests만 쓴다.
+SRTrain>=2.6.7

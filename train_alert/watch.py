@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import shutil
 import sys
 import time
@@ -18,9 +17,10 @@ from pathlib import Path
 from typing import Any
 
 from .config import Config, Leg, load_config, now_kst
-from .errors import SrtSearchError
+from .errors import SearchError
 from .matcher import SEAT, STANDBY, LegResult, alert_key, build_result
 from .notifier import Notifier
+from .providers import make_searcher
 from .state import DEFAULT_STATE_PATH, State
 
 log = logging.getLogger("train_alert")
@@ -50,7 +50,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--dry-run", action="store_true", help="알림을 실제로 보내지 않음")
     parser.add_argument(
-        "--fake", action="store_true", help="SRT에 접속하지 않고 가짜 데이터로 동작 확인"
+        "--provider", default=None, choices=["korail", "srt", "fake"], help="조회 대상"
+    )
+    parser.add_argument(
+        "--fake", action="store_true", help="실제 조회 없이 가짜 데이터로 동작 확인"
     )
     parser.add_argument("--verbose", action="store_true", help="SRT 통신 로그 출력")
     return parser.parse_args(argv)
@@ -70,9 +73,9 @@ def run_round(
     for leg in cfg.active_legs:
         try:
             trains = searcher.search(leg, seat_count_filter=cfg.seat_count_filter)
-        except SrtSearchError as exc:
+        except SearchError as exc:
             log.error("[%s] %s", leg.id, exc)
-            results.append(LegResult(leg=leg, error=str(exc)))
+            results.append(LegResult(leg=leg, error=_short(exc)))
             failures += 1
             continue
 
@@ -105,6 +108,12 @@ def run_round(
     return results, failures
 
 
+def _short(exc: Exception, limit: int = 180) -> str:
+    """알림과 상태 페이지에 넣기 좋게 오류 문구를 줄인다."""
+    text = " ".join(str(exc).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 def notify_hit(
     cfg: Config, notifier: Notifier, leg: Leg, views: list[Any], kind: str
 ) -> bool:
@@ -134,6 +143,7 @@ def build_status(cfg: Config, results: list[LegResult], rounds: int) -> dict[str
         "generated_at": now.isoformat(timespec="seconds"),
         "generated_at_label": now.strftime("%m/%d %H:%M:%S"),
         "rounds": rounds,
+        "provider": cfg.provider,
         "notify_standby": cfg.notify_standby,
         "seat_count_filter": cfg.seat_count_filter,
         "booking_url": cfg.booking_url,
@@ -163,6 +173,10 @@ def main(argv: list[str] | None = None) -> int:
         cfg.loop_minutes = args.loop
     if args.interval is not None:
         cfg.interval_seconds = args.interval
+    if args.provider:
+        cfg.provider = args.provider
+    if args.fake:
+        cfg.provider = "fake"
 
     if not cfg.active_legs:
         log.warning("감시할 구간이 없습니다 (모두 지난 날짜이거나 비활성).")
@@ -176,18 +190,8 @@ def main(argv: list[str] | None = None) -> int:
             "TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID를 설정하세요."
         )
 
-    if args.fake:
-        from .fake import FakeSearcher
-
-        searcher: Any = FakeSearcher()
-    else:
-        from .srt_client import SrtSearcher
-
-        searcher = SrtSearcher(
-            srt_id=os.environ.get("SRT_ID"),
-            srt_pw=os.environ.get("SRT_PW"),
-            verbose=args.verbose,
-        )
+    searcher = make_searcher(cfg.provider, verbose=args.verbose)
+    log.info("조회 대상: %s", cfg.provider)
 
     state = State(args.state or DEFAULT_STATE_PATH)
     out_dir = Path(args.out) if args.out else DEFAULT_OUT_DIR

@@ -1,0 +1,111 @@
+name: SRT 취소표 감시
+
+on:
+  schedule:
+    # 20분마다 실행하고, 한 번 실행될 때마다 18분 동안 반복 조회한다.
+    # (스케줄 지연을 감안해도 사실상 계속 감시하는 효과)
+    - cron: "*/20 * * * *"
+  workflow_dispatch:
+    inputs:
+      loop_minutes:
+        description: "이번 실행에서 반복 조회할 시간(분). 0이면 1회만"
+        required: false
+        default: "0"
+      dry_run:
+        description: "알림을 실제로 보내지 않고 로그로만 확인"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: train-alert
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SRT_ID: ${{ secrets.SRT_ID }}
+      SRT_PW: ${{ secrets.SRT_PW }}
+      NTFY_SERVER: ${{ secrets.NTFY_SERVER || 'https://ntfy.sh' }}
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      LOOP_MINUTES: ${{ github.event.inputs.loop_minutes || vars.LOOP_MINUTES || '18' }}
+      INTERVAL_SECONDS: ${{ vars.INTERVAL_SECONDS || '90' }}
+      RENOTIFY_MINUTES: ${{ vars.RENOTIFY_MINUTES || '120' }}
+      NOTIFY_STANDBY: ${{ vars.NOTIFY_STANDBY || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 의존성 설치
+        run: pip install -r train_alert/requirements.txt
+
+      - name: 로직 테스트
+        run: python -m unittest discover -s train_alert/tests -t .
+
+      - name: SRT 조회 및 알림
+        id: watch
+        continue-on-error: true
+        run: |
+          python -m train_alert.watch \
+            --out _site \
+            ${{ inputs.dry_run && '--dry-run' || '' }}
+
+      - name: 상태 파일 커밋 (변경된 경우만)
+        if: always()
+        run: |
+          if [ -z "$(git status --porcelain -- train_alert/state.json)" ]; then
+            echo "상태 변화 없음"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add train_alert/state.json
+          git commit -m "Update train alert state [skip ci]"
+          for attempt in 1 2 3 4; do
+            git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            echo "push 실패, 재시도 ${attempt}"
+            sleep $((2 ** attempt))
+          done
+          exit 1
+
+      - name: Pages 설정
+        if: always()
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: 상태 페이지 업로드
+        if: always()
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: 조회 실패 시 실패로 표시
+        if: steps.watch.outcome == 'failure'
+        run: |
+          echo "::error::모든 구간 조회에 실패했습니다. 로그와 SRT 차단 여부를 확인하세요."
+          exit 1
+
+  deploy:
+    needs: watch
+    if: always()
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

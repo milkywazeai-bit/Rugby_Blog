@@ -1,0 +1,29 @@
+{
+  "renotify_minutes": 120,
+  "notify_standby": false,
+  "seat_count_filter": true,
+  "interval_seconds": 90,
+  "loop_minutes": 0,
+  "legs": [
+    {
+      "id": "go",
+      "label": "가는 편 · 수서 → 부산",
+      "dep": "수서",
+      "arr": "부산",
+      "date": "20260924",
+      "time_from": "05:00",
+      "time_to": "11:59",
+      "adults": 2
+    },
+    {
+      "id": "back",
+      "label": "오는 편 · 부산 → 수서",
+      "dep": "부산",
+      "arr": "수서",
+      "date": "20260927",
+      "time_from": "16:00",
+      "time_to": "19:00",
+      "adults": 2
+    }
+  ]
+}

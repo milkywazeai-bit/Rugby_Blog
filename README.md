@@ -77,3 +77,12 @@ Drive API는 서비스 계정에 저장 용량이 없어서(개인 Gmail 기준)
    - `GDRIVE_FOLDER_ID`
 
 네 개 시크릿이 모두 등록되면 다음 실행부터 새 글이 그 Drive 폴더에 자동 업로드됩니다.
+
+---
+
+# SRT 명절 취소표 감시기
+
+이 저장소에는 블로그 크롤러와 별개로, 수서↔부산 SRT 취소표를 감시해서
+휴대폰으로 알림을 보내는 도구가 `train_alert/`에 함께 들어 있습니다.
+
+설정 방법은 [`train_alert/README.md`](train_alert/README.md)를 보세요.

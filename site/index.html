@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0b1220">
+<title>SRT 취소표 감시</title>
+<style>
+  :root {
+    --bg: #f4f6fb;
+    --card: #ffffff;
+    --ink: #131722;
+    --muted: #626b7d;
+    --line: #e3e7ef;
+    --ok: #0a7c4a;
+    --ok-bg: #dcf5e8;
+    --wait: #8a5a00;
+    --wait-bg: #fdf0d5;
+    --dead: #7b8394;
+    --dead-bg: #eef1f6;
+    --accent: #1f4fd8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1220;
+      --card: #151d2e;
+      --ink: #eaeef7;
+      --muted: #94a0b8;
+      --line: #26314a;
+      --ok: #7ee2b0;
+      --ok-bg: #10402c;
+      --wait: #f0c979;
+      --wait-bg: #453413;
+      --dead: #7c879e;
+      --dead-bg: #1d2637;
+      --accent: #7ea4ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 20px 16px 48px;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
+      "Pretendard", "Noto Sans KR", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 560px; margin: 0 auto; }
+  header { margin-bottom: 18px; }
+  h1 { font-size: 20px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+  .leg-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 10px; margin-bottom: 2px;
+  }
+  .leg-title { font-size: 16px; font-weight: 650; margin: 0; }
+  .leg-meta { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  .summary {
+    font-size: 14px; font-weight: 600; padding: 9px 12px;
+    border-radius: 10px; margin-bottom: 12px;
+  }
+  .summary.hit { background: var(--ok-bg); color: var(--ok); }
+  .summary.none { background: var(--dead-bg); color: var(--dead); }
+  .summary.err { background: var(--wait-bg); color: var(--wait); }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  td { padding: 7px 0; border-top: 1px solid var(--line); vertical-align: middle; }
+  tr:first-child td { border-top: 0; }
+  .time { font-weight: 600; white-space: nowrap; }
+  .no { color: var(--muted); font-size: 13px; white-space: nowrap; }
+  .badge {
+    display: inline-block; padding: 2px 9px; border-radius: 999px;
+    font-size: 12px; font-weight: 650; white-space: nowrap;
+  }
+  .badge.ok { background: var(--ok-bg); color: var(--ok); }
+  .badge.wait { background: var(--wait-bg); color: var(--wait); }
+  .badge.dead { background: var(--dead-bg); color: var(--dead); }
+  td.right { text-align: right; }
+  .cta {
+    display: block; text-align: center; text-decoration: none;
+    background: var(--accent); color: #fff; font-weight: 650;
+    padding: 13px; border-radius: 12px; margin-top: 4px;
+  }
+  @media (prefers-color-scheme: dark) { .cta { color: #0b1220; } }
+  footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 18px; }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 5px; vertical-align: middle; }
+  .dot.bad { background: var(--wait); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>SRT 취소표 감시</h1>
+    <p class="sub" id="updated">불러오는 중…</p>
+  </header>
+
+  <div id="legs"></div>
+
+  <a class="cta" id="book" href="https://app.srail.or.kr/main/main.do">SRT 예매 화면 열기</a>
+
+  <footer>
+    좌석이 열리면 휴대폰으로 알림이 갑니다 · 이 화면은 60초마다 새로고침됩니다
+  </footer>
+</main>
+
+<script>
+const legsEl = document.getElementById('legs');
+const updatedEl = document.getElementById('updated');
+
+function badge(train) {
+  if (train.seat_available) return '<span class="badge ok">' + train.seat_label + '</span>';
+  if (train.standby_available) return '<span class="badge wait">예약대기</span>';
+  return '<span class="badge dead">매진</span>';
+}
+
+function legCard(leg) {
+  const rows = leg.trains.map(t => `
+    <tr>
+      <td class="time">${t.dep_time} → ${t.arr_time}</td>
+      <td class="no">SRT ${t.train_number}</td>
+      <td class="right">${badge(t)}</td>
+    </tr>`).join('');
+
+  let summary;
+  if (leg.error) {
+    summary = `<div class="summary err">조회 실패 · ${escapeHtml(leg.error)}</div>`;
+  } else if (leg.hit_count > 0) {
+    summary = `<div class="summary hit">좌석 있는 열차 ${leg.hit_count}편 — 지금 예매하세요</div>`;
+  } else if (leg.standby_count > 0) {
+    summary = `<div class="summary err">좌석은 없고 예약대기 ${leg.standby_count}편</div>`;
+  } else {
+    summary = `<div class="summary none">이 시간대는 전부 매진입니다</div>`;
+  }
+
+  return `<section class="card">
+    <div class="leg-head"><h2 class="leg-title">${escapeHtml(leg.label)}</h2></div>
+    <p class="leg-meta">${leg.date_label} ${leg.window} 출발 · 성인 ${leg.adults}명</p>
+    ${summary}
+    <table>${rows || '<tr><td class="no">조회된 열차가 없습니다</td></tr>'}</table>
+  </section>`;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function load() {
+  try {
+    const res = await fetch('status.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!res.ok) throw new Error('status.json ' + res.status);
+    const data = await res.json();
+    const dot = data.ok ? '<span class="dot"></span>' : '<span class="dot bad"></span>';
+    updatedEl.innerHTML = dot + '마지막 확인 ' + escapeHtml(data.generated_at_label || '-');
+    legsEl.innerHTML = (data.legs || []).map(legCard).join('');
+    if (data.booking_url) document.getElementById('book').href = data.booking_url;
+  } catch (err) {
+    updatedEl.textContent = '상태를 불러오지 못했습니다 (' + err.message + ')';
+  }
+}
+
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>

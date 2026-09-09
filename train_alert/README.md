@@ -14,6 +14,86 @@
 
 ---
 
+## 모바일에서 설정하기 (전부 폰으로 됩니다)
+
+PC 없이 폰 브라우저만으로 끝납니다. 아래 링크를 순서대로 누르세요.
+GitHub 설정 화면이 깨져 보이면 브라우저 메뉴에서 **데스크톱 사이트 요청**을 켜세요.
+(GitHub 앱이 아니라 **브라우저**로 여세요. 앱에서는 Secrets 등록이 안 됩니다.)
+
+### ① ntfy 앱 설치하고 토픽 구독
+
+[iOS](https://apps.apple.com/app/ntfy/id1625396347) · [Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy)
+
+앱에서 `+` → 토픽 이름을 **아무도 못 맞출 긴 문자열**로 정해 구독합니다.
+예: `train-suseo-busan-9f3k2h7q1x` — 이 이름을 그대로 ②에 넣습니다.
+
+### ② 토픽 이름을 Secret으로 등록
+
+👉 [Secret 추가 화면 열기](https://github.com/milkywazeai-bit/Rugby_Blog/settings/secrets/actions/new)
+
+- **Name**: `NTFY_TOPIC`
+- **Secret**: ①에서 정한 토픽 이름
+- **Add secret** 누르기
+
+### ③ 이 브랜치를 기본 브랜치에 머지
+
+스케줄 실행은 기본 브랜치에서만 되기 때문에 꼭 필요합니다.
+
+👉 [PR 만들기 화면 열기](https://github.com/milkywazeai-bit/Rugby_Blog/compare/claude/naver-blog-crawl-products-n4k7sw...claude/train-ticket-alert-site-qhk4wp?expand=1)
+
+**Create pull request** → 다음 화면에서 **Merge pull request** → **Confirm merge**
+
+### ④ 바로 한 번 돌려보기
+
+👉 [워크플로 화면 열기](https://github.com/milkywazeai-bit/Rugby_Blog/actions/workflows/train-alert.yml)
+
+우측 **Run workflow** → `dry_run` 체크(알림 없이 조회만) → **Run workflow**
+1~2분 뒤 실행 결과를 열어 로그를 확인합니다.
+잘 되면 `dry_run` 없이 한 번 더 돌려서 폰에 알림이 오는지 봅니다.
+
+### ⑤ 상태 페이지를 홈 화면에 추가
+
+④가 성공하면 Pages가 자동으로 켜집니다.
+
+👉 <https://milkywazeai-bit.github.io/Rugby_Blog/>
+
+Safari는 **공유 → 홈 화면에 추가**, Chrome은 **⋮ → 홈 화면에 추가**.
+
+### ⑥ (선택) 감시 주기 조절
+
+👉 [Variables 화면 열기](https://github.com/milkywazeai-bit/Rugby_Blog/settings/variables/actions)
+
+`INTERVAL_SECONDS`, `LOOP_MINUTES` 등을 넣으면 코드 수정 없이 바뀝니다.
+값은 아래 [동작 조절](#동작-조절-settings--variables) 표를 참고하세요.
+
+### 일정만 바꾸고 싶을 때
+
+👉 [trips.json 편집](https://github.com/milkywazeai-bit/Rugby_Blog/edit/claude/naver-blog-crawl-products-n4k7sw/train_alert/trips.json)
+
+폰에서도 편집됩니다. 아래로 내려 **Commit changes**를 누르면 다음 실행부터 반영됩니다.
+
+---
+
+## 안드로이드 폰에서 직접 돌리기 (선택)
+
+GitHub Actions는 스케줄이 5~15분씩 밀립니다. 더 촘촘히 보려면 Termux에서
+폰이 직접 돌리게 할 수 있습니다. **코레일 조회는 `requests` 하나만 있으면 됩니다.**
+
+```bash
+pkg install python git -y
+git clone https://github.com/milkywazeai-bit/Rugby_Blog
+cd Rugby_Blog
+pip install requests
+
+export NTFY_TOPIC=train-suseo-busan-9f3k2h7q1x
+termux-wake-lock                       # 화면 꺼져도 계속 돌게
+python -m train_alert.watch --loop 360 --interval 30
+```
+
+아이폰에는 이런 방법이 없습니다. GitHub Actions 쪽을 쓰세요.
+
+---
+
 ## 0. 먼저 알아둘 것 — 코레일·SR 통합
 
 2026년 9월 1일자로 코레일과 SR이 통합되어 **수서 출발 고속열차도 KTX로 통합 운행**되고,

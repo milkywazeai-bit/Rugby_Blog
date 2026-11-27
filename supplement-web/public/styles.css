@@ -337,3 +337,34 @@ button.item-body{cursor:pointer}
 .meal-times{display:flex;flex-direction:column;gap:8px;margin-top:10px}
 .mt-row{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2);font-weight:600}
 .mt-row input{font:inherit;font-family:var(--font-mono);border:1px solid var(--border);border-radius:10px;padding:6px 10px;background:var(--surface);color:var(--ink)}
+
+/* 상황별 세트 */
+.admin-seg{display:flex;margin-bottom:14px}
+.admin-seg button{flex:1}
+.set-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);padding:14px;box-shadow:var(--shadow);margin-bottom:12px}
+.set-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.set-head strong{font-size:1rem}
+.set-note{margin:6px 0 10px;font-size:.85rem;color:var(--ink-muted);white-space:pre-line;line-height:1.55}
+.set-items{display:flex;flex-direction:column;gap:6px}
+.set-line{display:flex;align-items:center;gap:8px}
+.set-line .cy-prod{flex:1;min-width:0}
+.set-items .set-line{flex-direction:column;align-items:stretch;gap:3px}
+.set-dose{font-size:.76rem;color:var(--ink-muted);padding-left:4px}
+.set-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:10px}
+.set-edit-row{border:1px solid var(--border);border-radius:14px;padding:8px;margin-bottom:8px;background:var(--surface)}
+.set-edit-fields{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px}
+.mini{display:flex;align-items:center;gap:6px;font-size:.8rem;color:var(--ink-muted)}
+.mini input{width:72px;font:inherit;border:1px solid var(--border);border-radius:10px;padding:6px 8px;background:var(--surface);color:var(--ink)}
+.meal-pick.small{gap:4px}
+.set-meal{padding:6px 10px;border-radius:var(--radius-pill);border:1px solid var(--border);background:var(--surface);font-size:.78rem;font-weight:600;color:var(--ink-muted)}
+.set-meal.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.set-memo{flex:1 1 100%;font:inherit;font-size:.85rem;border:1px solid var(--border);border-radius:10px;padding:8px 10px;background:var(--surface);color:var(--ink)}
+.set-offers{margin-top:24px}
+.sub-head{font-size:.95rem;margin:0 0 2px}
+.set-add-row{border:1px solid var(--border);border-radius:14px;padding:10px;margin-bottom:8px;display:flex;flex-direction:column;gap:6px}
+.set-add-row.muted{opacity:.75}
+.set-add-top{display:flex;align-items:center;gap:8px}
+.set-add-top input{width:20px;height:20px;accent-color:var(--accent);flex-shrink:0}
+.set-add-top .cy-prod{flex:1;min-width:0}
+.set-add-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.chip.set{background:#EDE3F5;color:#6A3F8C}

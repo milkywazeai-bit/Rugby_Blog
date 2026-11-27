@@ -79,6 +79,18 @@ test("only the admin edits the shared rotation; everyone signed in reads it", as
   await denied(getDoc(doc(stranger.db, "config", "rotation")));
 });
 
+test("only the admin edits 상황별 세트; everyone signed in reads them", async () => {
+  const set = { title: "운동 부스터", note: "운동 전 공복", items: [{ productId: "p1", perDose: 2, meals: ["morning"], memo: "" }] };
+  await setDoc(doc(owner.db, "sets", "s1"), set);
+  await denied(setDoc(doc(friend.db, "sets", "s2"), set));
+  await denied(updateDoc(doc(friend.db, "sets", "s1"), { title: "바꿈" }));
+  await denied(deleteDoc(doc(friend.db, "sets", "s1")));
+  await denied(setDoc(doc(owner.db, "sets", "s3"), { ...set, title: "" }));
+  await denied(setDoc(doc(owner.db, "sets", "s4"), { ...set, items: [] }));
+  assert.equal((await getDoc(doc(friend.db, "sets", "s1"))).data().title, "운동 부스터");
+  await denied(getDoc(doc(stranger.db, "sets", "s1")));
+});
+
 test("personal data is private to its owner", async () => {
   await setDoc(doc(owner.db, "users", owner.uid, "items", "i1"), { name: "Mine" });
   await setDoc(doc(owner.db, "users", owner.uid, "meta", "rotation"), { rows: [], notes: "secret" });

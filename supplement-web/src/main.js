@@ -22,6 +22,7 @@ const CAPSULE_PAIRS = [
 ];
 const state = {
   user: null,
+  sets: [],
   adminUids: null,
   products: [],
   items: [],
@@ -174,7 +175,8 @@ function renderToday() {
       const left = e.productId ? invCount(e.productId) : null;
       const dl = left === null ? null : daysLeft(Math.max(0, left), use[e.productId]);
       const tag = e.kind === "cycle" ? `사이클 ${code}` : KIND_TAG[e.kind];
-      const when = `${mealLabel(e.meal)} 먹고`;
+      const memo = it && it.memo ? it.memo : "";
+      const when = memo || `${mealLabel(e.meal)} 먹고`;
       const stock = left === null ? "" : `<span class="chip ${dl !== null && dl < 10 ? "low" : "stock"}">재고 ${Math.max(0, left)}</span>`;
       let actions;
       if (e.status === "TAKEN") actions = `<button class="chip taken" data-undo="${esc(e.key)}" title="되돌리기">완료 ✓</button>`;
@@ -1131,7 +1133,7 @@ function renderExtras() {
       <button class="item-body" data-edit-item="${esc(it.id)}">
         ${p && p.brand ? `<span class="opt-brand">${esc(p.brand)}</span>` : ""}
         <span class="item-name">${esc(name)}</span>
-        <span class="item-meta">${extraMeals(it).map((m) => `<span class="chip meal">${mealLabel(m)}</span>`).join("")}<span>${esc(daysText(it.days))}</span><span>${fmtNum(extraAmount(it))}${esc(unitOf(it.productId))}씩</span>${left === null ? "" : `<span class="chip stock">재고 ${Math.max(0, left)}</span>`}</span>
+        <span class="item-meta">${it.setTitle ? `<span class="chip set">${esc(it.setTitle)}</span>` : ""}${extraMeals(it).map((m) => `<span class="chip meal">${mealLabel(m)}</span>`).join("")}${it.memo ? `<span>${esc(it.memo)}</span>` : ""}<span>${esc(daysText(it.days))}</span><span>${fmtNum(extraAmount(it))}${esc(unitOf(it.productId))}씩</span>${left === null ? "" : `<span class="chip stock">재고 ${Math.max(0, left)}</span>`}</span>
       </button>
       <button class="btn-small" data-edit-item="${esc(it.id)}">수정</button>
     </div>`;
@@ -1177,6 +1179,7 @@ function openItemSheet(itemId, fromProductId) {
         <p class="hint">고른 끼니마다 "한 번에 몇 개"만큼 먹어요. 끼니 시간은 내 정보 → 복용 시간에서 바꿀 수 있어요.</p>
       </div>
       <div class="field"><label for="fDose">한 번에 몇 개</label><input id="fDose" type="number" min="0.5" step="0.5" inputmode="decimal" value="${esc(extraAmount(base))}"></div>
+      <div class="field"><label for="fMemo">메모 (선택)</label><input id="fMemo" maxlength="40" placeholder="예: 운동 전 공복" value="${esc(base.memo || "")}"></div>
       <div class="field"><span class="label-like">요일</span>
         <div class="days">${DAY_LABELS.map((l, i) => `<button type="button" class="day-chip ${base.days.includes(i + 1) ? "on" : ""}" data-day="${i + 1}" aria-pressed="${base.days.includes(i + 1)}">${l}</button>`).join("")}</div>
       </div>
@@ -1200,7 +1203,7 @@ async function saveItemForm(form) {
   const meals = [...form.querySelectorAll(".meal-chip.on")].map((b) => b.dataset.meal);
   if (!meals.length) { toast("아침·점심·저녁 중 하나 이상 골라주세요."); return; }
   const perDose = Math.max(0.5, parseFloat($("#fDose").value) || 1);
-  const data = { name, productId: pid, perDose, meals, days };
+  const data = { name, productId: pid, perDose, meals, days, memo: ($("#fMemo").value || "").trim().slice(0, 40) };
   const uid = state.user.uid;
   try {
     const batch = writeBatch(db);
@@ -1213,6 +1216,208 @@ async function saveItemForm(form) {
     await batch.commit();
     closeSheet();
     toast(form.dataset.id ? "수정했어요." : "추가 영양제에 넣었어요. 오늘 탭에 나와요.");
+  } catch (e) { fail(e); }
+}
+
+// ---------- 상황별 세트 ----------
+// The admin builds named sets (운동 전 부스터 ...) in the 관리자 tab; anyone can add
+// a whole set to their 추가 영양제 in one go.
+let adminView = "products";
+let setDraft = null;
+
+function cleanSetItem(it) {
+  return {
+    productId: String(it.productId),
+    perDose: Math.max(0.5, Number(it.perDose) || 1),
+    meals: extraMeals({ meals: Array.isArray(it.meals) ? it.meals : [] }),
+    memo: String(it.memo || "").slice(0, 40)
+  };
+}
+
+function setItemText(it) {
+  const parts = [extraMeals(it).map(mealLabel).join("·"), `${fmtNum(it.perDose)}${unitOf(it.productId)}씩`];
+  if (it.memo) parts.push(it.memo);
+  return parts.join(" · ");
+}
+
+function setCard(s, actions) {
+  const items = s.items || [];
+  return `<article class="set-card">
+    <div class="set-head"><strong>${esc(s.title)}</strong><span class="chip">${items.length}가지</span></div>
+    ${s.note ? `<p class="set-note">${esc(s.note)}</p>` : ""}
+    <div class="set-items">${items.map((it) => `<div class="set-line">${productRow(it.productId)}<span class="set-dose">${esc(setItemText(it))}</span></div>`).join("")}</div>
+    ${actions}
+  </article>`;
+}
+
+function renderAdmin() {
+  document.querySelectorAll("[data-admin-view]").forEach((b) => b.classList.toggle("on", b.dataset.adminView === adminView));
+  $("#adminProducts").hidden = adminView !== "products";
+  $("#adminSets").hidden = adminView !== "sets";
+  renderProducts();
+  const box = $("#setAdminList");
+  box.innerHTML = state.sets.length
+    ? state.sets.map((s) => setCard(s, `<div class="set-actions"><button type="button" class="btn-small" data-set-edit="${esc(s.id)}">수정</button></div>`)).join("")
+    : `<div class="empty"><strong>아직 상황별 세트가 없어요.</strong><span>"+ 새 세트"로 운동 전 부스터처럼 같이 먹는 제품 묶음을 만들면, 사용자가 추가 영양제 탭에서 한 번에 등록할 수 있어요.</span></div>`;
+}
+
+function openSetEditor(id) {
+  const s = id ? state.sets.find((x) => x.id === id) : null;
+  setDraft = { id: s ? s.id : null, title: s ? s.title : "", note: s ? s.note || "" : "", items: s ? (s.items || []).map(cleanSetItem) : [], query: "" };
+  openSheet(s ? "세트 수정" : "새 상황별 세트", `<form id="setForm">
+    <div class="field"><label for="setTitle">세트 이름</label><input id="setTitle" maxlength="60" placeholder="예: 운동 퍼포먼스 부스터" value="${esc(setDraft.title)}"></div>
+    <div class="field"><label for="setNote">설명 · 먹는 법</label><textarea id="setNote" rows="3" maxlength="400" placeholder="예: 운동 전 공복에 같이 먹어요.">${esc(setDraft.note)}</textarea></div>
+    <div class="field"><span class="label-like">들어가는 제품</span><div id="setItems"></div></div>
+    <div class="field"><label for="setPickSearch">제품 넣기</label><input id="setPickSearch" class="search" type="search" placeholder="제품명이나 브랜드로 찾기" autocomplete="off"><div id="setPickList"></div></div>
+    <div class="sheet-actions"><button type="button" class="btn-secondary" data-close-sheet>취소</button><button type="submit" class="btn-primary">저장</button></div>
+    ${s ? `<button type="button" class="btn-danger-text" data-set-delete="${esc(s.id)}">이 세트 삭제</button>` : ""}
+  </form>`);
+  renderSetItems();
+  renderSetPick();
+}
+
+function renderSetItems() {
+  const box = $("#setItems");
+  if (!box || !setDraft) return;
+  box.innerHTML = setDraft.items.length ? setDraft.items.map((it, i) => `<div class="set-edit-row">
+      <div class="set-line">${productRow(it.productId)}<button type="button" class="btn-small" data-set-remove="${i}" aria-label="빼기">빼기</button></div>
+      <div class="set-edit-fields">
+        <label class="mini">한 번에 <input type="number" min="0.5" step="0.5" inputmode="decimal" data-set-dose="${i}" value="${esc(it.perDose)}"> ${esc(unitOf(it.productId))}</label>
+        <div class="meal-pick small">${MEALS.map((m) => `<button type="button" class="set-meal ${it.meals.includes(m.key) ? "on" : ""}" data-set-meal="${i}" data-meal="${m.key}" aria-pressed="${it.meals.includes(m.key)}">${m.label}</button>`).join("")}</div>
+        <input class="set-memo" maxlength="40" data-set-memo="${i}" placeholder="메모 (예: 운동 전 공복)" value="${esc(it.memo)}">
+      </div>
+    </div>`).join("") : `<p class="mc-note">아래에서 제품을 찾아 넣어주세요.</p>`;
+}
+
+function renderSetPick() {
+  const box = $("#setPickList");
+  if (!box || !setDraft) return;
+  const q = setDraft.query.trim().toLowerCase();
+  if (!q) { box.innerHTML = ""; return; }
+  const have = new Set(setDraft.items.map((it) => it.productId));
+  const list = state.products.filter((p) => !have.has(p.id) && productLabel(p).toLowerCase().includes(q)).slice(0, 20);
+  box.innerHTML = list.length
+    ? list.map((p) => `<button type="button" class="opt pick-row" data-set-add="${esc(p.id)}">${thumbHtml(p.name, isSafePhoto(p.photo) ? p.photo : null, "opt-photo")}<span class="opt-text">${p.brand ? `<span class="opt-brand">${esc(p.brand)}</span>` : ""}<span class="opt-name">${esc(p.name)}</span></span><span class="chip">+ 넣기</span></button>`).join("")
+    : `<p class="mc-note">"${esc(setDraft.query)}"에 맞는 제품이 없어요. 먼저 제품 관리에서 아이허브 링크로 추가해주세요.</p>`;
+}
+
+function handleSetClick(e) {
+  const t = e.target.closest("[data-admin-view],#setNew,[data-set-edit],[data-set-add],[data-set-remove],[data-set-meal],[data-set-delete],[data-set-use]");
+  if (!t) return false;
+  if (t.dataset.adminView) { adminView = t.dataset.adminView; renderAdmin(); }
+  else if (t.id === "setNew") openSetEditor(null);
+  else if (t.dataset.setEdit) openSetEditor(t.dataset.setEdit);
+  else if (t.dataset.setUse) openSetAdd(t.dataset.setUse);
+  else if (t.dataset.setDelete) {
+    if (!confirm("이 세트를 삭제할까요? 이미 추가 영양제에 넣은 사람의 영양제는 그대로 남아요.")) return true;
+    deleteDoc(doc(db, "sets", t.dataset.setDelete)).then(() => { closeSheet(); toast("세트를 삭제했어요."); }, fail);
+  } else if (setDraft) {
+    if (t.dataset.setAdd) {
+      const p = productById(t.dataset.setAdd);
+      setDraft.items.push({ productId: t.dataset.setAdd, perDose: 1, meals: ["morning"], memo: "" });
+      setDraft.query = "";
+      $("#setPickSearch").value = "";
+      renderSetItems();
+      renderSetPick();
+      if (p) toast(`${p.name}을(를) 넣었어요.`);
+    } else if (t.dataset.setRemove) {
+      setDraft.items.splice(parseInt(t.dataset.setRemove, 10), 1);
+      renderSetItems();
+    } else if (t.dataset.setMeal) {
+      const it = setDraft.items[parseInt(t.dataset.setMeal, 10)];
+      const on = it.meals.includes(t.dataset.meal);
+      if (on && it.meals.length === 1) { toast("끼니를 하나 이상 골라주세요."); return true; }
+      it.meals = on ? it.meals.filter((m) => m !== t.dataset.meal) : extraMeals({ meals: [...it.meals, t.dataset.meal] });
+      renderSetItems();
+    }
+  }
+  return true;
+}
+
+function handleSetInput(t) {
+  if (!setDraft) return false;
+  if (t.id === "setTitle") setDraft.title = t.value;
+  else if (t.id === "setNote") setDraft.note = t.value;
+  else if (t.id === "setPickSearch") { setDraft.query = t.value; renderSetPick(); }
+  else if (t.dataset.setDose) setDraft.items[parseInt(t.dataset.setDose, 10)].perDose = parseFloat(t.value) || 1;
+  else if (t.dataset.setMemo) setDraft.items[parseInt(t.dataset.setMemo, 10)].memo = t.value;
+  else return false;
+  return true;
+}
+
+async function saveSet() {
+  const title = setDraft.title.trim();
+  if (!title) { toast("세트 이름을 적어주세요."); $("#setTitle").focus(); return; }
+  if (!setDraft.items.length) { toast("제품을 하나 이상 넣어주세요."); return; }
+  const data = { title, note: setDraft.note.trim(), items: setDraft.items.map(cleanSetItem), updatedAt: serverTimestamp() };
+  try {
+    if (setDraft.id) await setDoc(doc(db, "sets", setDraft.id), data);
+    else await setDoc(doc(collection(db, "sets")), { ...data, createdAt: serverTimestamp() });
+    closeSheet();
+    toast("세트를 저장했어요. 추가 영양제 탭에서 모두에게 보여요.");
+  } catch (e) { fail(e); }
+}
+
+// 추가 영양제 tab: offer the sets.
+function renderSetOffers() {
+  const box = $("#setOffers");
+  if (!state.sets.length) { box.innerHTML = ""; box.hidden = true; return; }
+  box.hidden = false;
+  const mine = new Set(state.items.map((it) => it.productId));
+  box.innerHTML = `<h3 class="sub-head">상황별 세트</h3><p class="hint">상황에 맞게 같이 먹는 조합이에요. 한 번에 추가 영양제로 넣을 수 있어요.</p>` +
+    state.sets.map((s) => {
+      const all = (s.items || []).length && (s.items || []).every((it) => mine.has(it.productId));
+      return setCard(s, `<div class="set-actions">${all ? `<span class="chip taken">모두 추가됨</span>` : ""}<button type="button" class="${all ? "btn-small" : "btn-small primary"}" data-set-use="${esc(s.id)}">${all ? "다시 보기" : "이 세트 한 번에 추가"}</button></div>`);
+    }).join("");
+}
+
+function openSetAdd(id) {
+  const s = state.sets.find((x) => x.id === id);
+  if (!s) return;
+  const mine = new Set(state.items.map((it) => it.productId));
+  const cycleUse = productsInUse({ cycle: state.cycle, extras: [] });
+  const rows = (s.items || []).map((raw, i) => {
+    const it = cleanSetItem(raw);
+    const p = productById(it.productId);
+    const reason = mine.has(it.productId) ? "이미 추가 영양제에 있어요" : cycleUse.has(it.productId) ? "유산균 사이클에서 먹고 있어요" : "";
+    const stock = invCount(it.productId) ?? (p && p.count) ?? 30;
+    return `<div class="set-add-row${reason ? " muted" : ""}">
+      <label class="set-add-top"><input type="checkbox" data-set-pick="${i}" ${reason ? "" : "checked"}>${productRow(it.productId)}</label>
+      <div class="set-add-meta"><span class="set-dose">${esc(setItemText(it))}</span>${reason ? `<span class="chip low">${reason}</span>` : ""}</div>
+      <label class="mini">가지고 있는 개수 <input type="number" min="0" inputmode="numeric" data-set-stock="${i}" value="${esc(stock)}"></label>
+    </div>`;
+  }).join("");
+  openSheet(s.title, `<form id="setAddForm" data-set="${esc(s.id)}">
+    ${s.note ? `<p class="set-note">${esc(s.note)}</p>` : ""}
+    <p class="hint">체크한 제품이 추가 영양제에 매일로 들어가요. 넣은 뒤에 하나씩 수정할 수 있어요.</p>
+    ${rows}
+    <div class="sheet-actions"><button type="button" class="btn-secondary" data-close-sheet>취소</button><button type="submit" class="btn-primary">추가하기</button></div>
+  </form>`);
+}
+
+async function saveSetAdd(form) {
+  const s = state.sets.find((x) => x.id === form.dataset.set);
+  if (!s) return;
+  const picked = [...form.querySelectorAll("[data-set-pick]:checked")].map((c) => parseInt(c.dataset.setPick, 10));
+  if (!picked.length) { toast("추가할 제품을 하나 이상 체크해주세요."); return; }
+  const uid = state.user.uid;
+  const batch = writeBatch(db);
+  for (const i of picked) {
+    const it = cleanSetItem(s.items[i]);
+    const p = productById(it.productId);
+    batch.set(doc(collection(db, "users", uid, "items")), {
+      name: p ? p.name : "", productId: it.productId, perDose: it.perDose, meals: it.meals, days: [1, 2, 3, 4, 5, 6, 7],
+      memo: it.memo, setId: s.id, setTitle: s.title, createdDay: epochDay(), createdAt: serverTimestamp()
+    });
+    const stockInput = form.querySelector(`[data-set-stock="${i}"]`);
+    if (stockInput && stockInput.value !== "") {
+      batch.set(doc(db, "users", uid, "inventory", it.productId), { count: Math.max(0, parseInt(stockInput.value, 10) || 0), updatedAt: serverTimestamp() }, { merge: true });
+    }
+  }
+  try {
+    await batch.commit();
+    closeSheet();
+    toast(`${s.title}: ${picked.length}가지를 추가 영양제에 넣었어요.`);
   } catch (e) { fail(e); }
 }
 
@@ -1243,6 +1448,7 @@ async function saveMealTime(input) {
   if (!Number.isInteger(hh) || !Number.isInteger(mm)) return;
   const t = mealTimes(state.settings);
   const was = t[input.dataset.mealTime];
+  if (was === hh * 60 + mm) return;
   t[input.dataset.mealTime] = hh * 60 + mm;
   const keys = MEALS.map((m) => m.key);
   for (let i = 1; i < keys.length; i++) {
@@ -1278,8 +1484,9 @@ function renderAll() {
   renderToday();
   renderRotation();
   renderExtras();
+  renderSetOffers();
   renderInventory();
-  if (admin) renderProducts();
+  if (admin) renderAdmin();
   renderMe();
 }
 
@@ -1303,6 +1510,7 @@ function openSheet(title, html) {
 }
 function closeSheet() {
   draftPlan = null;
+  setDraft = null;
   restock = null;
   setup = null;
   $("#scrim").hidden = true;
@@ -1507,6 +1715,10 @@ function subscribe(uid) {
     state.adminUids = s.exists() && Array.isArray(s.data().uids) ? s.data().uids : [];
     renderAll();
   }, fail));
+  unsubs.push(onSnapshot(collection(db, "sets"), (s) => {
+    state.sets = s.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (a.title || "").localeCompare(b.title || "", "ko"));
+    renderAll();
+  }, fail));
   unsubs.push(onSnapshot(collection(db, "products"), (s) => {
     state.products = s.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (a.brand + a.name).localeCompare(b.brand + b.name, "ko"));
     renderAll();
@@ -1633,7 +1845,7 @@ function wire() {
   });
 
   document.addEventListener("click", (e) => {
-    if (handleEditorClick(e) || handleSetupClick(e) || handleRestockClick(e)) return;
+    if (handleEditorClick(e) || handleSetupClick(e) || handleRestockClick(e) || handleSetClick(e)) return;
     const t = e.target.closest(".meal-chip,[data-take-all],[data-take-section],#autoToggle,#autoSet,[data-take],[data-skip],[data-undo],[data-edit-item],[data-adopt],[data-edit-product],[data-close-sheet],[data-delete-item],[data-delete-product],[data-photo-clear],[data-import-remove],.day-chip,#importParse,#importSave,#rotEdit,#rotStart,#cyStock,#cyNext,#cyReset,#cyConfirm,[data-restock],[data-goto],[data-pick-product],[data-inv-edit]");
     if (!t) return;
     if (t.classList.contains("meal-chip")) {
@@ -1687,6 +1899,8 @@ function wire() {
     else if (e.target.id === "planForm") savePlan();
     else if (e.target.id === "stockForm") saveStock(e.target);
     else if (e.target.id === "restockForm") saveRestock();
+    else if (e.target.id === "setForm") saveSet();
+    else if (e.target.id === "setAddForm") saveSetAdd(e.target);
   });
 
   document.addEventListener("change", (e) => {
@@ -1705,7 +1919,7 @@ function wire() {
 
   document.addEventListener("input", (e) => {
     const t = e.target;
-    if (handleEditorInput(t)) return;
+    if (handleEditorInput(t) || handleSetInput(t)) return;
     if (t.id === "pickSearch") renderProductPicker(t.value);
     else if (t.dataset.imp) {
       const row = importRows[parseInt(t.closest(".import-row").dataset.index, 10)];
@@ -1729,7 +1943,7 @@ function boot() {
     unsubscribeAll();
     state.user = user;
     state.adminUids = null;
-    state.products = []; state.items = []; state.logs = {}; state.plan = null; state.planLoaded = false; state.cycle = null; state.cycleLoaded = false;
+    state.products = []; state.sets = []; state.items = []; state.logs = {}; state.plan = null; state.planLoaded = false; state.cycle = null; state.cycleLoaded = false;
     state.itemsLoaded = false; state.inventory = {}; state.inventoryLoaded = false; state.logsLoaded = false; state.settings = null;
     historyState.logs = null; historyState.loadedAt = 0; historyState.loading = false;
     migrated = false;

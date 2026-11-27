@@ -51,7 +51,7 @@ jobs:
       - name: Check deploy setup
         id: setup
         run: |
-          project=$(node -p "require('./.firebaserc').projects.default")
+          project=$(node -p "JSON.parse(require('fs').readFileSync('.firebaserc','utf8')).projects.default")
           if [ -z "$FIREBASE_SERVICE_ACCOUNT" ] || [ "$project" = "REPLACE_ME" ] || grep -q '"REPLACE_ME"' src/config.js; then
             echo "::notice::Deploy skipped: Firebase project or FIREBASE_SERVICE_ACCOUNT secret not set up yet (see supplement-web/README.md)."
             echo "deploy=false" >> "$GITHUB_OUTPUT"

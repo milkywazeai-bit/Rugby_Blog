@@ -37,8 +37,7 @@ service cloud.firestore {
       allow write: if isAdmin()
         && request.resource.data.methods is list
         && request.resource.data.methods.size() > 0
-        && request.resource.data.methods.size() <= 12
-        && request.resource.data.startMonth is int;
+        && request.resource.data.methods.size() <= 12;
     }
 
     // Shared catalog: everyone signed in can read, only admins can write.

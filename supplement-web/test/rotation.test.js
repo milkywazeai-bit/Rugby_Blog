@@ -1,36 +1,68 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { planForMonth, upcomingMonths, defaultPlan, validPlan } from "../src/rotation.js";
+import {
+  defaultPlan, validPlan, nextCycle, dailyUse, remaining, cycleStatus, itemsFromPicks, defaultPicks, perDose
+} from "../src/rotation.js";
 
-const plan = { ...defaultPlan(new Date(2026, 0, 1)) };
+const plan = defaultPlan();
 
-test("matches the guide: 1월 1-1, 2월 2-1, 3월 3-1, 4월 1-2", () => {
-  const codes = [1, 2, 3, 4].map((m) => planForMonth(plan, 2026, m).code);
+test("next cycle follows the guide: 1-1, 2-1, 3-1, 1-2", () => {
+  let c = { methodId: "m1", methodIndex: 0, round: 1 };
+  const codes = ["1-1"];
+  for (let i = 0; i < 3; i++) {
+    const n = nextCycle(plan, c);
+    c = { methodId: plan.methods[n.methodIndex].id, ...n };
+    codes.push(`${n.methodIndex + 1}-${n.round}`);
+  }
   assert.deepEqual(codes, ["1-1", "2-1", "3-1", "1-2"]);
-  assert.equal(planForMonth(plan, 2026, 4).method.id, "m1");
 });
 
-test("continues across the year boundary", () => {
-  const r = planForMonth(plan, 2027, 1);
-  assert.equal(r.code, "1-5");
-  assert.equal(r.method.title, "섭취법 1");
+test("single-option slots are pre-picked, pick-one slots wait for a choice", () => {
+  const picks = defaultPicks(plan.methods[0]);
+  assert.equal(picks["lunch:0"], "");
+  assert.equal(picks["lunch:1"], "wish-09");
+  assert.equal(picks["dinner:2"], "");
 });
 
-test("months before the start are marked", () => {
-  const r = planForMonth({ ...plan, startYear: 2026, startMonth: 12 }, 2026, 10);
-  assert.equal(r.before, true);
-  assert.equal(r.monthsUntilStart, 2);
+test("a previous pick is carried into the next cycle when it is still an option", () => {
+  const picks = defaultPicks(plan.methods[1], ["wish-03"]);
+  assert.equal(picks["dinner:2"], "wish-03");
 });
 
-test("upcoming months walk forward month by month", () => {
-  const list = upcomingMonths(plan, new Date(2026, 10, 27), 3);
-  assert.deepEqual(list.map((x) => [x.year, x.month, x.code]), [[2026, 11, "2-4"], [2026, 12, "3-4"], [2027, 1, "1-5"]]);
+test("excluded slots are left out; shared products add up per day", () => {
+  const picks = { ...defaultPicks(plan.methods[0]), "lunch:0": "wish-14", "dinner:2": null };
+  const items = itemsFromPicks(plan.methods[0], picks);
+  assert.equal(items.length, 6);
+  assert.equal(dailyUse(items)["wish-02"], 2);
+  assert.equal(dailyUse(items)["wish-14"], 1);
 });
 
-test("default plan is valid and uses real catalog ids", () => {
-  const p = defaultPlan(new Date(2026, 10, 1));
-  assert.equal(validPlan(p), true);
-  assert.equal(p.startMonth, 11);
-  assert.equal(p.methods[0].lunch[0].options.length, 6);
-  assert.equal(validPlan({ ...p, methods: [] }), false);
+test("remaining stock counts down from the day it was entered", () => {
+  assert.equal(remaining({ count: 30, day: 100 }, 1, 100), 30);
+  assert.equal(remaining({ count: 30, day: 100 }, 2, 110), 10);
+  assert.equal(remaining({ count: 5, day: 100 }, 1, 200), 0);
+  assert.equal(remaining(undefined, 1, 100), null);
+});
+
+test("cycle status is driven by the main (first lunch) product", () => {
+  const cycle = {
+    startDay: 100,
+    items: [{ meal: "lunch", productId: "wish-14", amount: "1캡슐" }, { meal: "dinner", productId: "wish-02", amount: "1캡슐" }],
+    stock: { "wish-14": { count: 12, day: 100 }, "wish-02": { count: 250, day: 100 } }
+  };
+  const s = cycleStatus(cycle, 104);
+  assert.equal(s.day, 5);
+  assert.equal(s.left, 8);
+  assert.equal(s.daysLeft, 8);
+  assert.equal(s.endDay, 112);
+});
+
+test("dose amounts are read from labels like 2캡슐", () => {
+  assert.equal(perDose("2캡슐"), 2);
+  assert.equal(perDose(""), 1);
+});
+
+test("default plan is valid", () => {
+  assert.equal(validPlan(plan), true);
+  assert.equal(validPlan({ methods: [] }), false);
 });

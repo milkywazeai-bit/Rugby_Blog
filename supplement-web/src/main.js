@@ -7,7 +7,9 @@ import {
 } from "./firebase.js";
 import { parseIherbLinks, findUnsupportedLinks, iherbSearchUrl, describeAmount, isIherbUrl } from "./iherb.js";
 import { compressPhoto, isSafePhoto } from "./photo.js";
-import { defaultPlan, planForMonth, upcomingMonths, validPlan } from "./rotation.js";
+import {
+  defaultPlan, validPlan, methodIndexOf, nextCycle, dailyUse, remaining, cycleStatus, itemsFromPicks, defaultPicks
+} from "./rotation.js";
 
 const DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"];
 const CAPSULE_PAIRS = [
@@ -22,6 +24,8 @@ const state = {
   logs: {},
   plan: null,
   planLoaded: false,
+  cycle: null,
+  cycleLoaded: false,
   tab: "today",
   productQuery: ""
 };
@@ -224,8 +228,22 @@ function renderProducts() {
   }).join("");
 }
 
-// ---------- rotation (shared plan; only admins edit) ----------
+// ---------- probiotic cycles ----------
+// The admin defines cycle types in config/rotation; each person runs their own
+// cycle (users/{uid}/meta/cycle), started on the day they confirm it.
 function productLabel(p) { return (p.brand ? p.brand + " " : "") + p.name; }
+function fmtDay(day) { const d = new Date(day * 86400000); return `${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일`; }
+function cycleCode(cycle) {
+  const idx = state.plan ? methodIndexOf(state.plan, cycle) : (cycle.methodIndex || 0);
+  return `${idx + 1}-${cycle.round || 1}`;
+}
+
+function productRow(pid, right = "") {
+  const p = productById(pid);
+  const name = p ? p.name : "삭제된 제품";
+  return `<div class="cy-prod">${thumbHtml(name, p && isSafePhoto(p.photo) ? p.photo : null, "opt-photo")}
+    <span class="opt-text">${p && p.brand ? `<span class="opt-brand">${esc(p.brand)}</span>` : ""}<span class="opt-name">${esc(name)}</span></span>${right}</div>`;
+}
 
 function slotHtml(slot) {
   const prods = (slot.options || []).map(productById).filter(Boolean);
@@ -235,59 +253,267 @@ function slotHtml(slot) {
         ${thumbHtml(p.name, isSafePhoto(p.photo) ? p.photo : null, "opt-photo")}
         <span class="opt-text">${p.brand ? `<span class="opt-brand">${esc(p.brand)}</span>` : ""}<span class="opt-name">${esc(p.name)}</span></span>
       </a>`).join("")
-    : `<span class="opt-missing">연결된 제품이 없어요${isAdmin() ? " — 로테이션 편집에서 골라주세요" : ""}</span>`;
+    : `<span class="opt-missing">연결된 제품이 없어요${isAdmin() ? " — 사이클 구성 편집에서 골라주세요" : ""}</span>`;
   return `<div class="slot">
     <div class="slot-head"><span class="slot-label">${esc(slot.label)}</span>${choose ? `<span class="chip pick">${prods.length}개 중 택1</span>` : ""}<span class="slot-amount">${esc(slot.amount || "")}</span></div>
     <div class="opts${choose ? " scroll" : ""}">${cards}</div>
   </div>`;
 }
 
-function monthCard(info, when, full) {
-  const plan = state.plan;
-  if (info.before) {
-    return `<div class="month-card${full ? " now" : ""}"><div class="mc-when">${when} · ${info.month}월</div>
-      <p class="mc-note">${info.monthsUntilStart}개월 뒤, ${plan.startYear}년 ${plan.startMonth}월에 시작해요.</p></div>`;
-  }
-  const m = info.method;
-  const head = `<div class="mc-when">${when} · ${info.month}월 <span class="chip code">${esc(info.code)}</span></div>
-    <div class="mc-title">${esc(m.title)}${m.subtitle ? ` <span class="mc-sub">${esc(m.subtitle)}</span>` : ""}</div>`;
-  if (!full) {
-    const names = (slots) => slots.map((s) => esc(s.label)).join(", ");
-    return `<div class="month-card">${head}<p class="mc-note">점심: ${names(m.lunch)}<br>저녁: ${names(m.dinner)}</p></div>`;
-  }
-  return `<div class="month-card now">${head}
-    <div class="meal"><div class="meal-head">점심 먹고</div>${m.lunch.map(slotHtml).join("")}</div>
-    <div class="meal"><div class="meal-head">저녁 먹고</div>${m.dinner.map(slotHtml).join("")}</div>
-  </div>`;
-}
-
 function renderRotation() {
   const plan = state.plan;
+  const cycle = state.cycle;
   const admin = isAdmin();
   $("#rotEdit").hidden = !(admin && plan);
-  $("#rotEmpty").hidden = !!plan || !state.planLoaded;
-  $("#rotCreate").hidden = !(admin && !plan);
-  $("#rotEmptyText").textContent = admin
-    ? "아직 유산균 로테이션이 없어요. 캡처하신 3사이클 규칙과 제품 목록으로 바로 만들 수 있어요."
-    : "관리자가 아직 유산균 로테이션을 만들지 않았어요.";
-  $("#rotContent").hidden = !plan;
-  if (!plan) return;
-  const now = new Date();
-  const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  $("#rotNow").innerHTML = monthCard(planForMonth(plan, now.getFullYear(), now.getMonth() + 1), "이번 달", true);
-  $("#rotNext").innerHTML = monthCard(planForMonth(plan, nextMonth.getFullYear(), nextMonth.getMonth() + 1), "다음 달", false);
-  $("#rotYear").innerHTML = upcomingMonths(plan, now, 12).map((x, i) => `<li class="${i === 0 ? "on" : ""}">
-    <span class="ry-month">${x.month === 1 || i === 0 ? x.year + "년 " : ""}${x.month}월</span>
-    ${x.before ? `<span class="ry-title muted">시작 전</span>` : `<span class="chip code">${esc(x.code)}</span><span class="ry-title">${esc(x.method.title)}${x.method.subtitle ? " · " + esc(x.method.subtitle) : ""}</span>`}
-  </li>`).join("");
+  const loaded = state.planLoaded && state.cycleLoaded;
+  $("#rotEmpty").hidden = !loaded || !!cycle;
+  $("#rotContent").hidden = !loaded || !cycle;
+  if (!loaded) return;
+  if (!cycle) {
+    const canStart = !!plan || admin;
+    $("#rotStart").hidden = !canStart;
+    $("#rotEmptyText").textContent = canStart
+      ? "사이클을 고르고 택1 제품을 정하면 오늘부터 시작돼요."
+      : "관리자가 아직 사이클 구성을 만들지 않았어요.";
+    return;
+  }
+  const today = epochDay();
+  const st = cycleStatus(cycle, today);
+  const use = dailyUse(cycle.items);
+  const mealList = (meal) => (cycle.items || []).filter((it) => it.meal === meal).map((it) => {
+    const left = remaining((cycle.stock || {})[it.productId], use[it.productId], today);
+    const low = left !== null && left <= use[it.productId] * 3;
+    return `<div class="cy-item"><div class="cy-label">${esc(it.label)}<span class="slot-amount">${esc(it.amount)}</span></div>
+      ${productRow(it.productId, left === null ? "" : `<span class="cy-left${low ? " low" : ""}">남은 약 ${left}개</span>`)}</div>`;
+  }).join("") || `<p class="mc-note">없음</p>`;
+  const mainName = st.main ? (productById(st.main.productId)?.name || st.main.label) : "";
+  const ending = st.daysLeft === null ? ""
+    : st.daysLeft <= 0
+      ? `<div class="cy-alert">${esc(mainName)}이(가) 다 떨어졌을 거예요. 다음 사이클을 시작하세요.</div>`
+      : `<p class="mc-note">${esc(mainName)} 기준 약 ${st.daysLeft}일 남았어요 · ${fmtDay(st.endDay)}쯤 다음 사이클로 넘어가요</p>`;
+  $("#rotNow").innerHTML = `<div class="month-card now">
+    <div class="mc-when">지금 사이클 <span class="chip code">${esc(cycleCode(cycle))}</span><span class="cy-days">${fmtDay(cycle.startDay)} 시작 · ${st.day}일째</span></div>
+    <div class="mc-title">${esc(cycle.title)}${cycle.subtitle ? ` <span class="mc-sub">${esc(cycle.subtitle)}</span>` : ""}</div>
+    ${ending}
+    <div class="meal"><div class="meal-head">점심 먹고</div>${mealList("lunch")}</div>
+    <div class="meal"><div class="meal-head">저녁 먹고</div>${mealList("dinner")}</div>
+    <div class="cy-actions"><button class="btn-small" id="cyStock" type="button">보유 개수 수정</button>
+      ${plan ? `<button class="btn-small primary" id="cyNext" type="button">다음 사이클 시작</button>` : ""}</div>
+  </div>`;
+  if (plan) {
+    const n = nextCycle(plan, cycle);
+    const m = plan.methods[n.methodIndex];
+    $("#rotNext").innerHTML = `<div class="month-card">
+      <div class="mc-when">다음 사이클 미리보기 <span class="chip code">${n.methodIndex + 1}-${n.round}</span></div>
+      <div class="mc-title">${esc(m.title)}${m.subtitle ? ` <span class="mc-sub">${esc(m.subtitle)}</span>` : ""}</div>
+      <div class="meal"><div class="meal-head">점심 먹고</div>${m.lunch.map(slotHtml).join("")}</div>
+      <div class="meal"><div class="meal-head">저녁 먹고</div>${m.dinner.map(slotHtml).join("")}</div>
+    </div>`;
+  } else {
+    $("#rotNext").innerHTML = "";
+  }
 }
 
-// The editor works on a copy so nothing changes for anyone until "저장".
+// ----- start / next cycle sheet -----
+let setup = null;
+
+function openCycleSetup(methodIndex) {
+  setup = { step: methodIndex === undefined ? 1 : 2, methodIndex, picks: null, stock: {} };
+  if (setup.step === 2) preparePicks();
+  openSheet(state.cycle ? "다음 사이클 시작" : "나의 사이클 추가하기", `<div id="cycleSetup"></div>`);
+  renderCycleSetup();
+}
+
+function preparePicks() {
+  const prevIds = (state.cycle?.items || []).map((it) => it.productId);
+  setup.picks = defaultPicks(state.plan.methods[setup.methodIndex], prevIds);
+}
+
+function stockDefault(pid) {
+  if (setup.stock[pid] !== undefined) return setup.stock[pid];
+  const cy = state.cycle;
+  if (cy && cy.stock && cy.stock[pid]) return remaining(cy.stock[pid], dailyUse(cy.items)[pid], epochDay());
+  const p = productById(pid);
+  return p && p.count ? p.count : 30;
+}
+
+function renderCycleSetup(keepScroll = true) {
+  const box = $("#cycleSetup");
+  if (!box || !setup) return;
+  const sheet = $(".sheet");
+  const scroll = keepScroll ? sheet.scrollTop : 0;
+  const plan = state.plan;
+  if (setup.step === 1) {
+    box.innerHTML = `<p class="hint">어떤 사이클로 시작할까요? 고른 사이클이 끝나면 다음 사이클로 순서대로 넘어가요.</p>` +
+      plan.methods.map((m, i) => {
+        const ids = [...new Set([...m.lunch, ...m.dinner].flatMap((s) => s.options || []))].slice(0, 8);
+        return `<button type="button" class="cy-choice" data-cy-method="${i}">
+          <span class="cy-choice-head"><span class="chip code">${i + 1}</span><strong>${esc(m.title)}</strong><span class="mc-sub">${esc(m.subtitle || "")}</span></span>
+          <span class="cy-thumbs">${ids.map((id) => { const p = productById(id); return thumbHtml(p ? p.name : "?", p && isSafePhoto(p.photo) ? p.photo : null, "cy-thumb"); }).join("")}</span>
+          <span class="mc-note">점심: ${m.lunch.map((s) => esc(s.label)).join(", ")}<br>저녁: ${m.dinner.map((s) => esc(s.label)).join(", ")}</span>
+        </button>`;
+      }).join("");
+    sheet.scrollTop = 0;
+    return;
+  }
+  const m = plan.methods[setup.methodIndex];
+  const slotPicker = (slot, meal, i) => {
+    const key = `${meal}:${i}`;
+    const cur = setup.picks[key];
+    const opts = slot.options || [];
+    const multi = opts.length > 1;
+    const excluded = cur === null;
+    const optBtns = opts.map((id) => {
+      const p = productById(id);
+      const name = p ? p.name : "삭제된 제품";
+      return `<button type="button" class="opt pickable${cur === id ? " on" : ""}" data-cy-pick="${key}" data-pid="${esc(id)}"${p ? "" : " disabled"} aria-pressed="${cur === id}">
+        ${thumbHtml(name, p && isSafePhoto(p.photo) ? p.photo : null, "opt-photo")}
+        <span class="opt-text">${p && p.brand ? `<span class="opt-brand">${esc(p.brand)}</span>` : ""}<span class="opt-name">${esc(name)}</span></span>
+        <span class="tick" aria-hidden="true"></span></button>`;
+    }).join("");
+    return `<div class="slot cy-slot${excluded ? " excluded" : ""}${multi && cur === "" ? " need" : ""}" data-slot="${key}">
+      <div class="slot-head"><span class="slot-label">${esc(slot.label)}</span>${multi && !excluded ? `<span class="chip pick">${opts.length}개 중 택1</span>` : ""}<span class="slot-amount">${esc(slot.amount || "")}</span>
+        <button type="button" class="link-btn" data-cy-exclude="${key}">${excluded ? "다시 넣기" : "빼기"}</button></div>
+      ${excluded ? `<p class="mc-note">이번 사이클에서는 안 먹어요</p>` : `<div class="opts">${optBtns}</div>`}
+    </div>`;
+  };
+  const items = itemsFromPicks(m, setup.picks);
+  const pids = [...new Set(items.map((it) => it.productId))];
+  const use = dailyUse(items);
+  box.innerHTML = `<div class="cy-setup-head"><span class="chip code">${setup.methodIndex + 1}</span><strong>${esc(m.title)}</strong><span class="mc-sub">${esc(m.subtitle || "")}</span>
+      <button type="button" class="link-btn" data-cy-back>다른 사이클 고르기</button></div>
+    <div class="meal"><div class="meal-head">점심 먹고</div>${m.lunch.map((s, i) => slotPicker(s, "lunch", i)).join("")}</div>
+    <div class="meal"><div class="meal-head">저녁 먹고</div>${m.dinner.map((s, i) => slotPicker(s, "dinner", i)).join("")}</div>
+    <div class="meal"><div class="meal-head">지금 가지고 있는 개수</div>
+      <p class="hint">이미 먹고 있던 제품은 남은 개수로 고쳐주세요. 새 통이면 그대로 두면 돼요.</p>
+      ${pids.map((pid) => `<div class="cy-stock">${productRow(pid)}
+        <label class="cy-stock-in"><input type="number" min="0" inputmode="numeric" data-cy-stock="${esc(pid)}" value="${esc(stockDefault(pid))}" aria-label="보유 개수"><span>개<br>하루 ${use[pid]}개</span></label></div>`).join("")
+        || `<p class="mc-note">고른 제품이 없어요.</p>`}
+    </div>
+    <div class="sheet-actions"><button type="button" class="btn-secondary" data-close-sheet>취소</button>
+      <button type="button" class="btn-primary" id="cyConfirm">사이클 확정 — 오늘(${fmtDay(epochDay())})부터</button></div>`;
+  sheet.scrollTop = scroll;
+}
+
+function handleSetupClick(e) {
+  if (!setup || !e.target.closest("#cycleSetup")) return false;
+  const t = e.target.closest("[data-cy-method],[data-cy-back],[data-cy-pick],[data-cy-exclude]");
+  if (!t) return false;
+  if (t.dataset.cyMethod !== undefined) {
+    setup.methodIndex = parseInt(t.dataset.cyMethod, 10);
+    setup.step = 2;
+    setup.stock = {};
+    preparePicks();
+    renderCycleSetup(false);
+  } else if ("cyBack" in t.dataset) {
+    setup.step = 1;
+    renderCycleSetup(false);
+  } else if (t.dataset.cyPick) {
+    setup.picks[t.dataset.cyPick] = t.dataset.pid;
+    renderCycleSetup();
+  } else if (t.dataset.cyExclude) {
+    const key = t.dataset.cyExclude;
+    if (setup.picks[key] === null) {
+      const [meal, i] = key.split(":");
+      const opts = state.plan.methods[setup.methodIndex][meal][parseInt(i, 10)].options || [];
+      setup.picks[key] = opts.length === 1 ? opts[0] : "";
+    } else {
+      setup.picks[key] = null;
+    }
+    renderCycleSetup();
+  }
+  return true;
+}
+
+async function confirmCycle() {
+  const plan = state.plan;
+  const m = plan.methods[setup.methodIndex];
+  const missing = Object.keys(setup.picks).find((k) => setup.picks[k] === "");
+  if (missing) {
+    toast("택1 칸에서 제품을 골라주세요. 안 드실 거면 '빼기'를 누르세요.");
+    const el = document.querySelector(`[data-slot="${missing}"]`);
+    if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+    return;
+  }
+  const items = itemsFromPicks(m, setup.picks);
+  if (!items.length) { toast("최소 한 가지 제품은 있어야 해요."); return; }
+  const today = epochDay();
+  const stock = {};
+  for (const pid of new Set(items.map((it) => it.productId))) {
+    stock[pid] = { count: Math.max(0, parseInt(stockDefault(pid), 10) || 0), day: today };
+  }
+  const prev = state.cycle;
+  let round = 1;
+  if (prev) {
+    const prevIdx = methodIndexOf(plan, prev);
+    round = setup.methodIndex <= prevIdx ? (prev.round || 1) + 1 : (prev.round || 1);
+  }
+  const history = prev
+    ? [...(prev.history || []).slice(-23), { methodId: prev.methodId, title: prev.title, round: prev.round || 1, startDay: prev.startDay, endDay: today }]
+    : [];
+  try {
+    await setDoc(doc(db, "users", state.user.uid, "meta", "cycle"), {
+      methodId: m.id, methodIndex: setup.methodIndex, title: m.title, subtitle: m.subtitle || "",
+      round, startDay: today, items, stock, history, updatedAt: serverTimestamp()
+    });
+    setup = null;
+    closeSheet();
+    toast(prev ? "다음 사이클을 시작했어요. 오늘이 1일째예요." : "사이클을 시작했어요. 오늘이 1일째예요.");
+  } catch (e) { fail(e); }
+}
+
+function openStockSheet() {
+  const cy = state.cycle;
+  const today = epochDay();
+  const use = dailyUse(cy.items);
+  const pids = [...new Set((cy.items || []).map((it) => it.productId))];
+  openSheet("보유 개수 수정", `<form id="stockForm">
+    <p class="hint">지금 실제로 남아 있는 개수를 적어주세요. 오늘부터 다시 계산해요.</p>
+    ${pids.map((pid) => `<div class="cy-stock">${productRow(pid)}
+      <label class="cy-stock-in"><input type="number" min="0" inputmode="numeric" name="${esc(pid)}" value="${esc(remaining(cy.stock?.[pid], use[pid], today) ?? "")}" aria-label="보유 개수"><span>개<br>하루 ${use[pid]}개</span></label></div>`).join("")}
+    <div class="sheet-actions"><button type="button" class="btn-secondary" data-close-sheet>취소</button><button type="submit" class="btn-primary">저장</button></div>
+  </form>`);
+}
+
+async function saveStock(form) {
+  const today = epochDay();
+  const stock = { ...(state.cycle.stock || {}) };
+  form.querySelectorAll("input[type=number]").forEach((inp) => {
+    if (inp.value !== "") stock[inp.name] = { count: Math.max(0, parseInt(inp.value, 10) || 0), day: today };
+  });
+  try {
+    await updateDoc(doc(db, "users", state.user.uid, "meta", "cycle"), { stock });
+    closeSheet();
+    toast("보유 개수를 고쳤어요.");
+  } catch (e) { fail(e); }
+}
+
+async function startFirstCycle() {
+  if (!state.plan) {
+    if (!isAdmin()) return;
+    try {
+      const plan = defaultPlan();
+      await setDoc(doc(db, "config", "rotation"), { ...plan, updatedAt: serverTimestamp(), updatedBy: state.user.uid });
+      state.plan = plan;
+    } catch (e) { fail(e); return; }
+  }
+  openCycleSetup();
+}
+
+async function resetCycle() {
+  if (!confirm("지금 사이클을 지우고 처음부터 다시 설정할까요?")) return;
+  try {
+    await deleteDoc(doc(db, "users", state.user.uid, "meta", "cycle"));
+    toast("사이클을 지웠어요. + 버튼으로 다시 시작하세요.");
+  } catch (e) { fail(e); }
+}
+
+// ----- admin: cycle types editor (works on a copy until "저장") -----
 let draftPlan = null;
 
 function openRotationEditor() {
   draftPlan = JSON.parse(JSON.stringify(state.plan || defaultPlan()));
-  openSheet("유산균 로테이션 편집", `<div id="planEditor"></div>`);
+  openSheet("사이클 구성 편집", `<div id="planEditor"></div>`);
   renderRotationEditor();
 }
 
@@ -298,7 +524,6 @@ function renderRotationEditor() {
   const scroll = sheet.scrollTop;
   const catalog = [...state.products].sort((a, b) => productLabel(a).localeCompare(productLabel(b), "ko"));
   const optionList = catalog.map((p) => `<option value="${esc(p.id)}">${esc(productLabel(p))}</option>`).join("");
-  const start = `${draftPlan.startYear}-${pad2(draftPlan.startMonth)}`;
   const slotEditor = (slot, mi, meal, si) => `<div class="ps" data-m="${mi}" data-meal="${meal}" data-s="${si}">
       <div class="ps-row">
         <input data-ps="label" value="${esc(slot.label)}" placeholder="칸 이름 (예: 발효효소)" aria-label="칸 이름">
@@ -312,18 +537,17 @@ function renderRotationEditor() {
       <select data-opt-add aria-label="제품 추가"><option value="">+ 제품 추가${(slot.options || []).length ? " (2개 이상이면 택1)" : ""}</option>${optionList}</select>
     </div>`;
   box.innerHTML = `<form id="planForm">
-    <div class="field"><label for="planStart">시작 월 — 이 달이 섭취법 1, 1사이클(1-1)이에요</label>
-      <input type="month" id="planStart" value="${start}" required></div>
+    <p class="hint">모든 사용자가 사이클을 고를 때 보는 구성이에요. 첫 번째 점심 칸이 사이클의 주인공이라, 이 제품이 떨어지면 다음 사이클로 넘어가요. 이미 진행 중인 사이클은 그대로이고 다음 사이클부터 반영돼요.</p>
     ${draftPlan.methods.map((m, mi) => `<section class="pm" data-m="${mi}">
       <div class="pm-head"><span class="chip code">${mi + 1}</span>
-        <input data-pm="title" value="${esc(m.title)}" placeholder="섭취법 ${mi + 1}" aria-label="섭취법 이름">
+        <input data-pm="title" value="${esc(m.title)}" placeholder="섭취법 ${mi + 1}" aria-label="사이클 이름">
         <input data-pm="subtitle" value="${esc(m.subtitle || "")}" placeholder="설명 (예: 가든 유산균)" aria-label="설명"></div>
       ${["lunch", "dinner"].map((meal) => `<div class="pm-meal"><div class="meal-head">${meal === "lunch" ? "점심 먹고" : "저녁 먹고"}</div>
         ${m[meal].map((slot, si) => slotEditor(slot, mi, meal, si)).join("")}
         <button type="button" class="btn-small" data-slot-add="${meal}" data-m="${mi}">+ 칸 추가</button></div>`).join("")}
-      ${draftPlan.methods.length > 1 ? `<button type="button" class="btn-danger-text" data-method-del="${mi}">섭취법 ${mi + 1} 삭제</button>` : ""}
+      ${draftPlan.methods.length > 1 ? `<button type="button" class="btn-danger-text" data-method-del="${mi}">${esc(m.title || "이 사이클")} 삭제</button>` : ""}
     </section>`).join("")}
-    <button type="button" class="rot-add" data-method-add>+ 섭취법 추가</button>
+    <button type="button" class="rot-add" data-method-add>+ 사이클 추가</button>
     <div class="sheet-actions"><button type="button" class="btn-secondary" data-close-sheet>취소</button>
       <button type="submit" class="btn-primary">저장 — 모든 사용자에게 적용</button></div>
   </form>`;
@@ -346,7 +570,7 @@ function handleEditorClick(e) {
     const n = draftPlan.methods.length + 1;
     draftPlan.methods.push({ id: "m" + Date.now().toString(36), title: "섭취법 " + n, subtitle: "", lunch: [], dinner: [] });
   } else if (t.dataset.methodDel) {
-    if (!confirm("이 섭취법을 삭제할까요? 저장하기 전까지는 적용되지 않아요.")) return true;
+    if (!confirm("이 사이클을 삭제할까요? 저장하기 전까지는 적용되지 않아요.")) return true;
     draftPlan.methods.splice(parseInt(t.dataset.methodDel, 10), 1);
   } else if (t.dataset.slotAdd) {
     const { method } = editorTarget(t);
@@ -362,11 +586,6 @@ function handleEditorClick(e) {
 
 function handleEditorChange(t) {
   if (!draftPlan || !t.closest("#planEditor")) return false;
-  if (t.id === "planStart") {
-    const [y, m] = (t.value || "").split("-").map(Number);
-    if (y && m) { draftPlan.startYear = y; draftPlan.startMonth = m; }
-    return true;
-  }
   if (t.matches("[data-opt-add]") && t.value) {
     const { slot } = editorTarget(t);
     if (!slot.options.includes(t.value)) slot.options.push(t.value);
@@ -377,6 +596,10 @@ function handleEditorChange(t) {
 }
 
 function handleEditorInput(t) {
+  if (setup && t.dataset.cyStock) {
+    setup.stock[t.dataset.cyStock] = Math.max(0, parseInt(t.value, 10) || 0);
+    return true;
+  }
   if (!draftPlan || !t.closest("#planEditor")) return false;
   if (t.dataset.pm) { editorTarget(t).method[t.dataset.pm] = t.value; return true; }
   if (t.dataset.ps) { editorTarget(t).slot[t.dataset.ps] = t.value; return true; }
@@ -384,7 +607,7 @@ function handleEditorInput(t) {
 }
 
 async function savePlan() {
-  const plan = draftPlan;
+  const plan = { methods: draftPlan.methods };
   plan.methods.forEach((m) => {
     m.title = (m.title || "").trim() || "섭취법";
     ["lunch", "dinner"].forEach((meal) => {
@@ -392,19 +615,12 @@ async function savePlan() {
         .map((s) => ({ label: (s.label || "").trim() || "이름 없음", options: s.options, amount: (s.amount || "").trim() }));
     });
   });
-  if (!validPlan(plan)) { toast("시작 월과 섭취법을 확인해주세요."); return; }
+  if (!validPlan(plan)) { toast("사이클이 하나 이상 있어야 해요."); return; }
   try {
     await setDoc(doc(db, "config", "rotation"), { ...plan, updatedAt: serverTimestamp(), updatedBy: state.user.uid });
     draftPlan = null;
     closeSheet();
-    toast("유산균 로테이션을 저장했어요. 모든 사용자에게 바로 적용돼요.");
-  } catch (e) { fail(e); }
-}
-
-async function createDefaultPlan() {
-  try {
-    await setDoc(doc(db, "config", "rotation"), { ...defaultPlan(), updatedAt: serverTimestamp(), updatedBy: state.user.uid });
-    toast("캡처한 규칙으로 로테이션을 만들었어요. 이번 달이 섭취법 1이에요.");
+    toast("사이클 구성을 저장했어요. 모든 사용자에게 바로 적용돼요.");
   } catch (e) { fail(e); }
 }
 
@@ -450,6 +666,7 @@ function openSheet(title, html) {
 }
 function closeSheet() {
   draftPlan = null;
+  setup = null;
   $("#scrim").hidden = true;
   $("#sheetBody").innerHTML = "";
   document.body.classList.remove("sheet-open");
@@ -744,6 +961,11 @@ function subscribe(uid) {
     state.planLoaded = true;
     renderRotation();
   }, fail));
+  unsubs.push(onSnapshot(doc(db, "users", uid, "meta", "cycle"), (s) => {
+    state.cycle = s.exists() ? s.data() : null;
+    state.cycleLoaded = true;
+    renderRotation();
+  }, fail));
 }
 function unsubscribeAll() {
   unsubs.forEach((u) => u());
@@ -788,8 +1010,8 @@ function wire() {
   });
 
   document.addEventListener("click", (e) => {
-    if (handleEditorClick(e)) return;
-    const t = e.target.closest("[data-take],[data-skip],[data-undo],[data-edit-item],[data-adopt],[data-edit-product],[data-close-sheet],[data-delete-item],[data-delete-product],[data-photo-clear],[data-import-remove],.day-chip,#importParse,#importSave,#rotEdit,#rotCreate");
+    if (handleEditorClick(e) || handleSetupClick(e)) return;
+    const t = e.target.closest("[data-take],[data-skip],[data-undo],[data-edit-item],[data-adopt],[data-edit-product],[data-close-sheet],[data-delete-item],[data-delete-product],[data-photo-clear],[data-import-remove],.day-chip,#importParse,#importSave,#rotEdit,#rotStart,#cyStock,#cyNext,#cyReset,#cyConfirm");
     if (!t) return;
     if (t.dataset.take) setStatus(t.dataset.take, "TAKEN");
     else if (t.dataset.skip) setStatus(t.dataset.skip, "SKIPPED");
@@ -817,7 +1039,11 @@ function wire() {
     } else if (t.id === "importParse") parseImport();
     else if (t.id === "importSave") saveImport();
     else if (t.id === "rotEdit") openRotationEditor();
-    else if (t.id === "rotCreate") createDefaultPlan();
+    else if (t.id === "rotStart") startFirstCycle();
+    else if (t.id === "cyStock") openStockSheet();
+    else if (t.id === "cyNext") openCycleSetup(nextCycle(state.plan, state.cycle).methodIndex);
+    else if (t.id === "cyReset") resetCycle();
+    else if (t.id === "cyConfirm") confirmCycle();
   });
 
   document.addEventListener("submit", (e) => {
@@ -825,6 +1051,7 @@ function wire() {
     if (e.target.id === "itemForm") saveItemForm(e.target);
     else if (e.target.id === "productForm") saveProductForm(e.target);
     else if (e.target.id === "planForm") savePlan();
+    else if (e.target.id === "stockForm") saveStock(e.target);
   });
 
   document.addEventListener("change", (e) => {
@@ -867,7 +1094,7 @@ function boot() {
     unsubscribeAll();
     state.user = user;
     state.adminUids = null;
-    state.products = []; state.items = []; state.logs = {}; state.plan = null; state.planLoaded = false;
+    state.products = []; state.items = []; state.logs = {}; state.plan = null; state.planLoaded = false; state.cycle = null; state.cycleLoaded = false;
     if (!user) { closeSheet(); showScreen("screenLogin"); return; }
     showScreen("screenApp");
     switchTab(state.tab);

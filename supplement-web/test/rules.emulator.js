@@ -66,13 +66,16 @@ test("products reject non-image photo data and empty names", async () => {
 });
 
 test("only the admin edits the shared rotation; everyone signed in reads it", async () => {
-  const plan = { startYear: 2026, startMonth: 11, methods: [{ id: "m1", title: "섭취법 1", lunch: [], dinner: [] }] };
+  const plan = { methods: [{ id: "m1", title: "섭취법 1", lunch: [], dinner: [] }] };
   await setDoc(doc(owner.db, "config", "rotation"), plan);
-  await denied(setDoc(doc(friend.db, "config", "rotation"), { ...plan, startMonth: 1 }));
+  await denied(setDoc(doc(friend.db, "config", "rotation"), { methods: [{ id: "x", title: "몰래", lunch: [], dinner: [] }] }));
   await denied(deleteDoc(doc(friend.db, "config", "rotation")));
-  await denied(setDoc(doc(owner.db, "config", "rotation"), { ...plan, methods: [] }));
+  await denied(setDoc(doc(owner.db, "config", "rotation"), { methods: [] }));
   const snap = await getDoc(doc(friend.db, "config", "rotation"));
-  assert.equal(snap.data().startMonth, 11);
+  assert.equal(snap.data().methods[0].title, "섭취법 1");
+  // each person's own cycle is private
+  await setDoc(doc(friend.db, "users", friend.uid, "meta", "cycle"), { methodId: "m1", startDay: 1, items: [] });
+  await denied(getDoc(doc(owner.db, "users", friend.uid, "meta", "cycle")));
   await denied(getDoc(doc(stranger.db, "config", "rotation")));
 });
 

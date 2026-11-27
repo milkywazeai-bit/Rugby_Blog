@@ -85,18 +85,17 @@
 
       <section class="panel" data-panel="rotation" hidden>
         <div class="rot-top">
-          <p class="hint">유산균은 한 가지만 계속 먹지 않고, 달마다 정해진 순서로 조합을 바꿔 먹어요. 이번 달에 먹을 제품을 확인하세요.</p>
-          <button id="rotEdit" class="btn-small" type="button" hidden>로테이션 편집</button>
+          <p class="hint">유산균은 한 가지만 계속 먹지 않고, 사이클마다 조합을 바꿔 가며 먹어요.</p>
+          <button id="rotEdit" class="btn-small" type="button" hidden>사이클 구성 편집</button>
         </div>
-        <div id="rotEmpty" class="empty" hidden>
-          <span id="rotEmptyText"></span>
-          <button id="rotCreate" class="btn-primary" type="button" hidden>캡처한 3사이클 규칙으로 만들기</button>
+        <div id="rotEmpty" class="cy-empty" hidden>
+          <button id="rotStart" class="cy-start" type="button"><span class="cy-plus" aria-hidden="true">+</span><span>나의 사이클 추가하기</span></button>
+          <p id="rotEmptyText" class="hint"></p>
         </div>
         <div id="rotContent" hidden>
           <div id="rotNow"></div>
           <div id="rotNext"></div>
-          <h3 class="sub-head">앞으로 12개월 순서</h3>
-          <ol id="rotYear" class="rot-year"></ol>
+          <button id="cyReset" class="btn-danger-text" type="button">사이클 처음부터 다시 설정</button>
         </div>
       </section>
 

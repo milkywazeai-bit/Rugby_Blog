@@ -10,7 +10,7 @@ import { compressPhoto, isSafePhoto } from "./photo.js";
 import { parseShot, photoRect, matchProduct } from "./shot.js";
 import {
   defaultPlan, validPlan, methodIndexOf, nextCycle, dailyUse, remaining, cycleStatus, itemsFromPicks, defaultPicks,
-  slotOptions, baseSlots, baseItemsFromPicks, defaultBasePicks, planProductIds
+  slotOptions, baseSlots, baseItemsFromPicks, defaultBasePicks, planProductIds, pastPicks
 } from "./rotation.js";
 import {
   dayEntries, dailyUseAll, daysLeft, productsInUse, MEALS, mealTimes, mealLabel, extraMeal, extraMeals, historyGroups, extraAmount, autoTakeList
@@ -514,7 +514,9 @@ function openCycleSetup(methodIndex) {
 }
 
 function preparePicks() {
-  const prevIds = (state.cycle?.items || []).map((it) => it.productId);
+  // Products eaten in an earlier round of this cycle type get a badge, and are not pre-picked.
+  setup.past = pastPicks(state.plan, state.cycle, setup.methodIndex);
+  const prevIds = (state.cycle?.items || []).map((it) => it.productId).filter((id) => !setup.past.has(id));
   setup.picks = defaultPicks(state.plan.methods[setup.methodIndex], prevIds);
   if (setup.withBase) Object.assign(setup.picks, defaultBasePicks(baseSlots(state.plan)));
 }
@@ -539,15 +541,21 @@ function slotPicker(slot, key) {
   const multi = opts.length > 1;
   const excluded = cur === null;
   const meals = key.startsWith("base:") ? (slot.meals && slot.meals.length ? slot.meals : ["lunch"]) : null;
+  const past = !key.startsWith("base:") && multi && setup.past ? setup.past : new Map();
+  let eatenCount = 0;
   const optBtns = opts.map((ids, oi) => {
     const ok = ids.every((id) => productById(id));
-    return `<button type="button" class="opt pickable${ids.length > 1 ? " set" : ""}${cur === oi ? " on" : ""}" data-cy-pick="${key}" data-opt="${oi}"${ok ? "" : " disabled"} aria-pressed="${cur === oi}">
+    const codes = [...new Set(ids.flatMap((id) => past.get(id) || []))];
+    if (codes.length) eatenCount++;
+    return `<button type="button" class="opt pickable${ids.length > 1 ? " set" : ""}${cur === oi ? " on" : ""}${codes.length ? " eaten" : ""}" data-cy-pick="${key}" data-opt="${oi}"${ok ? "" : " disabled"} aria-pressed="${cur === oi}">
+      ${codes.length ? `<span class="chip eaten-badge">${esc(codes.join(", "))}에 먹음</span>` : ""}
       ${optionInner(ids)}<span class="tick" aria-hidden="true"></span></button>`;
   }).join("");
   return `<div class="slot cy-slot${excluded ? " excluded" : ""}${multi && cur === "" ? " need" : ""}" data-slot="${key}">
     <div class="slot-head"><span class="slot-label">${esc(slot.label)}</span>${multi && !excluded ? `<span class="chip pick">${opts.length}개 중 택1</span>` : ""}
       ${meals ? `<span class="chip meals">${meals.map((m) => MEAL_NAMES[m]).join("·")}</span>` : ""}<span class="slot-amount">${esc(slot.amount || "")}</span>
       <button type="button" class="link-btn" data-cy-exclude="${key}">${excluded ? "다시 넣기" : "빼기"}</button></div>
+    ${!excluded && eatenCount ? `<p class="mc-note eaten-note">지난번에 먹은 건 표시해뒀어요. ${eatenCount < opts.length ? "이번엔 다른 걸 골라보세요." : "모두 한 번씩 먹었어요."}</p>` : ""}
     ${excluded ? `<p class="mc-note">안 먹어요</p>` : `<div class="opts">${optBtns}</div>`}
   </div>`;
 }
@@ -652,7 +660,10 @@ async function confirmCycle() {
     round = setup.methodIndex <= prevIdx ? (prev.round || 1) + 1 : (prev.round || 1);
   }
   const history = prev
-    ? [...(prev.history || []).slice(-23), { methodId: prev.methodId, title: prev.title, round: prev.round || 1, startDay: prev.startDay, endDay: today }]
+    ? [...(prev.history || []).slice(-23), {
+      methodId: prev.methodId, title: prev.title, round: prev.round || 1, startDay: prev.startDay, endDay: today,
+      productIds: [...new Set((prev.items || []).map((it) => it.productId).filter(Boolean))]
+    }]
     : [];
   try {
     const uid = state.user.uid;

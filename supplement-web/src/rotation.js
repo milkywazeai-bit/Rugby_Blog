@@ -159,6 +159,27 @@ export function itemsFromPicks(method, picks) {
   return out;
 }
 
+// What was eaten in earlier rounds of one cycle type: productId → ["1-1", ...].
+// Reads the running cycle and its history (entries saved with productIds).
+export function pastPicks(plan, cycle, methodIndex) {
+  const out = new Map();
+  const m = plan && plan.methods[methodIndex];
+  if (!m || !cycle) return out;
+  const entries = [...(cycle.history || []), { methodId: cycle.methodId, round: cycle.round, items: cycle.items }];
+  for (const h of entries) {
+    if (h.methodId !== m.id) continue;
+    const code = `${methodIndex + 1}-${h.round || 1}`;
+    const ids = Array.isArray(h.productIds) ? h.productIds : (h.items || []).map((it) => it.productId);
+    for (const id of ids) {
+      if (!id) continue;
+      const list = out.get(id) || [];
+      if (!list.includes(code)) list.push(code);
+      out.set(id, list);
+    }
+  }
+  return out;
+}
+
 export function defaultPicks(method, carryOver = []) {
   const picks = {};
   for (const meal of ["lunch", "dinner"]) {

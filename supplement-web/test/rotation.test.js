@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   defaultPlan, validPlan, nextCycle, dailyUse, remaining, cycleStatus, itemsFromPicks, defaultPicks, perDose,
-  baseSlots, baseItemsFromPicks, defaultBasePicks, planProductIds
+  baseSlots, baseItemsFromPicks, defaultBasePicks, planProductIds, pastPicks
 } from "../src/rotation.js";
 
 const plan = defaultPlan();
@@ -107,4 +107,24 @@ test("planProductIds lists every product in methods and the base set", () => {
   const ids = planProductIds(defaultPlan());
   for (const id of ["wish-13", "wish-18", "wish-07", "wish-23", "wish-33", "wish-37", "wish-09", "wish-02", "wish-39", "wish-01", "wish-03"]) assert.ok(ids.has(id), id);
   assert.equal(planProductIds(null).size, 0);
+});
+
+test("pastPicks: what earlier rounds of the same cycle type used", () => {
+  const plan = defaultPlan();
+  const cycle = {
+    methodId: plan.methods[2].id, round: 1, items: [{ productId: "wish-33" }, { productId: "wish-34" }],
+    history: [
+      { methodId: plan.methods[0].id, round: 1, productIds: ["wish-14"] },
+      { methodId: plan.methods[1].id, round: 1, productIds: ["wish-29", "wish-07"] },
+      { methodId: plan.methods[0].id, round: 2, productIds: ["wish-16"] },
+      { methodId: plan.methods[0].id, round: 3 }
+    ]
+  };
+  const c1 = pastPicks(plan, cycle, 0);
+  assert.deepEqual(c1.get("wish-14"), ["1-1"]);
+  assert.deepEqual(c1.get("wish-16"), ["1-2"]);
+  assert.equal(c1.has("wish-29"), false);
+  const c3 = pastPicks(plan, cycle, 2);
+  assert.deepEqual(c3.get("wish-33"), ["3-1"]);
+  assert.equal(pastPicks(plan, null, 0).size, 0);
 });

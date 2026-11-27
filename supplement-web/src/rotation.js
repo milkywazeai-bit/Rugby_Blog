@@ -9,8 +9,9 @@ const one = (id) => ({ ids: [id] });
 const set = (...ids) => ({ ids });
 const ACV = "wish-01";
 const BUTYRATE = "wish-02";
+const VITC_D_ZINC = "wish-03";
 const ENZYMES = "wish-09";
-const VITC_ZINC = [one("wish-20"), one("wish-03")];
+const TRIBUTYRIN = "wish-39";
 const GARDEN_OF_LIFE = ["wish-13", "wish-14", "wish-15", "wish-16", "wish-17", "wish-18"].map(one);
 const MULTI_STRAIN = ["wish-23", "wish-28", "wish-29", "wish-30", "wish-31", "wish-32"].map(one);
 const MUCOSA_SETS = [set("wish-33", "wish-34"), set("wish-36", "wish-35"), set("wish-38", "wish-37")];
@@ -24,43 +25,67 @@ export function slotOptions(slot) {
   return (slot.options || []).map(optionIds).filter((ids) => ids.length);
 }
 
-function common(lunchFirst) {
-  return {
-    lunch: [
-      ...lunchFirst,
-      { label: "발효효소", options: [one(ENZYMES)], amount: "1캡슐" },
-      { label: "칼마부티르산", options: [one(BUTYRATE)], amount: "1캡슐" },
-      { label: "애사비", options: [one(ACV)], amount: "1캡슐" }
-    ],
-    dinner: [
-      { label: "칼마부티르산", options: [one(BUTYRATE)], amount: "1캡슐" },
-      { label: "애사비", options: [one(ACV)], amount: "1캡슐" },
-      { label: "비타민C + 아연", options: VITC_ZINC, amount: "1캡슐" }
-    ]
-  };
-}
-
+// Cycles 1-3 rotate; the base set ("4번 사이클") is chosen once when a person
+// starts and keeps going under every cycle. Base slots list the meals they're taken at.
 export function defaultPlan() {
   return {
     methods: [
-      { id: "m1", title: "섭취법 1", subtitle: "가든 유산균", ...common([
+      { id: "m1", title: "섭취법 1", subtitle: "가든 유산균", lunch: [
         { label: "가든 유산균", options: GARDEN_OF_LIFE, amount: "1캡슐" }
-      ]) },
-      { id: "m2", title: "섭취법 2", subtitle: "다균주 + 플로라", ...common([
+      ], dinner: [] },
+      { id: "m2", title: "섭취법 2", subtitle: "다균주 + 플로라", lunch: [
         { label: "다균주 유산균", options: MULTI_STRAIN, amount: "1캡슐" },
         { label: "플로라파지", options: [one("wish-07")], amount: "1캡슐" }
-      ]) },
-      { id: "m3", title: "섭취법 3", subtitle: "점막 개선", ...common([
+      ], dinner: [] },
+      { id: "m3", title: "섭취법 3", subtitle: "점막 개선", lunch: [
         { label: "점막 개선 세트", options: MUCOSA_SETS, amount: "각 1캡슐" }
-      ]) }
-    ]
+      ], dinner: [] }
+    ],
+    base: {
+      title: "4번 사이클",
+      subtitle: "기본 구성 · 사이클과 상관없이 계속",
+      slots: [
+        { label: "발효효소", options: [one(ENZYMES)], amount: "1캡슐", meals: ["lunch"] },
+        { label: "칼마부티르산 또는 트리부티린", options: [one(BUTYRATE), one(TRIBUTYRIN)], amount: "1캡슐", meals: ["lunch", "dinner"] },
+        { label: "애사비", options: [one(ACV)], amount: "1캡슐", meals: ["lunch", "dinner"] },
+        { label: "비타민C + D + 아연", options: [one(VITC_D_ZINC)], amount: "1캡슐", meals: ["dinner"] }
+      ]
+    }
   };
 }
 
 export function validPlan(plan) {
   return !!plan
     && Array.isArray(plan.methods) && plan.methods.length > 0
-    && plan.methods.every((m) => Array.isArray(m.lunch) && Array.isArray(m.dinner));
+    && plan.methods.every((m) => Array.isArray(m.lunch) && Array.isArray(m.dinner))
+    && (!plan.base || Array.isArray(plan.base.slots));
+}
+
+export function baseSlots(plan) {
+  return plan && plan.base && Array.isArray(plan.base.slots) ? plan.base.slots : [];
+}
+
+// Base picks use keys "base:0", "base:1", ...; one pick covers every meal of the slot.
+export function baseItemsFromPicks(slots, picks) {
+  const out = [];
+  slots.forEach((slot, i) => {
+    const pick = picks[`base:${i}`];
+    if (pick === null || pick === "" || pick === undefined) return;
+    const meals = Array.isArray(slot.meals) && slot.meals.length ? slot.meals : ["lunch"];
+    for (const meal of ["lunch", "dinner"]) {
+      if (!meals.includes(meal)) continue;
+      for (const pid of slotOptions(slot)[pick] || []) {
+        out.push({ meal, label: slot.label, amount: slot.amount || "", productId: pid });
+      }
+    }
+  });
+  return out;
+}
+
+export function defaultBasePicks(slots) {
+  const picks = {};
+  slots.forEach((slot, i) => { picks[`base:${i}`] = slotOptions(slot).length === 1 ? 0 : ""; });
+  return picks;
 }
 
 export function methodIndexOf(plan, cycle) {

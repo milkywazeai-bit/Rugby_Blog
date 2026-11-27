@@ -169,6 +169,12 @@ img{max-width:100%}
 .ps-num{flex-shrink:0;font-size:.7rem;font-weight:600;color:var(--ink-muted);padding-top:5px;min-width:44px}
 .ps-option .ps-opts{flex:1;margin:0}
 .ps-option select{margin-top:2px;padding:5px 8px;font-size:.78rem}
+.month-card.base{background:var(--surface-2)}
+.base-block{border:1px dashed var(--accent);border-radius:16px;padding:12px;margin-top:16px;background:var(--surface-2)}
+.chip.meals{background:var(--surface-2);color:var(--ink-muted);border:1px solid var(--border)}
+.ps-meals{display:flex;gap:14px;margin:6px 0 2px}
+.ps-meals .check{margin:0}
+.pm.base{border-style:dashed;border-color:var(--accent)}
 .pm{border:1px solid var(--border);border-radius:16px;padding:12px;margin-bottom:12px}
 .pm-head{display:flex;gap:6px;align-items:center;margin-bottom:6px}
 .pm-head input{flex:1;min-width:0;padding:8px 10px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2)}

@@ -5,7 +5,7 @@ import {
 import {
   initFirebase, isConfigured, useEmulator, watchAuth, signInWithGoogle, signInTestUser, logOut, db
 } from "./firebase.js";
-import { parseIherbLinks, findUnsupportedLinks, iherbSearchUrl, describeAmount } from "./iherb.js";
+import { parseIherbLinks, findUnsupportedLinks, iherbSearchUrl, describeAmount, isIherbUrl } from "./iherb.js";
 import { compressPhoto, isSafePhoto } from "./photo.js";
 
 const DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"];
@@ -56,11 +56,7 @@ function hashColor(name) {
 function isAdmin() { return !!(state.user && state.adminUids && state.adminUids.includes(state.user.uid)); }
 function productById(id) { return state.products.find((p) => p.id === id) || null; }
 function safeIherbUrl(url, name) {
-  try {
-    const u = new URL(url);
-    if (u.protocol === "https:" && /(^|\.)iherb\.com$/i.test(u.hostname)) return u.href;
-  } catch { /* fall through */ }
-  return iherbSearchUrl(name);
+  return isIherbUrl(url) ? new URL(url).href : iherbSearchUrl(name);
 }
 function photoFor(item) {
   const p = item.productId ? productById(item.productId) : null;
@@ -389,7 +385,7 @@ function openItemSheet(itemId, fromProductId) {
         : photoPicker(sheetPhoto, "직접 찍은 영양제 통 사진을 추천해요. 이 사진은 나만 볼 수 있어요.")}
       <div class="field"><label for="fName">이름</label>
         <input id="fName" required maxlength="80" value="${esc(base.name)}" placeholder="예: 오메가3">
-        <a class="iherb-link" id="fNameIherb" target="_blank" rel="noopener" href="${esc(prod ? safeIherbUrl(prod.url, prod.name) : iherbSearchUrl(base.name))}">아이허브에서 보기 →</a>
+        <a class="iherb-link" id="fNameIherb" target="_blank" rel="noopener" href="${esc(prod ? safeIherbUrl(prod.url, prod.name) : safeIherbUrl(base.url, base.name))}">아이허브에서 보기 →</a>
       </div>
       <div class="field"><label for="fDosage">용량 / 설명</label>
         <input id="fDosage" maxlength="80" value="${esc(base.dosage)}" placeholder="예: 1,000 mg · 1캡슐"></div>
@@ -490,9 +486,10 @@ function openImportSheet() {
   importRows = [];
   const admin = isAdmin();
   openSheet("아이허브 링크로 추가", `
-    <p class="hint">아이허브 앱이나 사이트에서 <strong>공유 → 링크 복사</strong> 한 주소를 붙여넣으세요. 여러 개를 한꺼번에 붙여넣어도 돼요.
+    <p class="hint">아이허브에서 <strong>공유 → 링크 복사</strong> 한 내용을 그대로 붙여넣으세요. 여러 개를 한꺼번에 붙여넣어도 돼요.
+      아이허브 <strong>앱</strong>의 공유 링크는 이름이 안 들어 있어서 이름만 직접 적으시면 돼요. 아이허브 <strong>웹사이트</strong> 주소창의 주소를 붙여넣으면 이름까지 자동으로 채워져요.
       ${admin ? "관리자라서 <strong>공용 제품 목록</strong>에 저장돼요." : "<strong>내 스케줄</strong>에 저장돼요."}</p>
-    <textarea id="importText" rows="5" placeholder="https://www.iherb.com/pr/.../12345&#10;https://kr.iherb.com/pr/.../67890"></textarea>
+    <textarea id="importText" rows="5" placeholder="https://iherb.co/...&#10;https://kr.iherb.com/pr/.../12345"></textarea>
     <div class="sheet-actions"><button type="button" class="btn-primary" id="importParse">링크 읽기</button></div>
     <div id="importResult"></div>`);
 }
@@ -501,12 +498,14 @@ function renderImportRows() {
   const admin = isAdmin();
   const box = $("#importResult");
   if (!importRows.length) { box.innerHTML = ""; return; }
-  box.innerHTML = `<p class="hint">자동으로 읽은 내용이에요. 틀린 곳은 고쳐주세요.</p>` +
+  const needName = importRows.some((r) => r.needsName && !r.duplicate);
+  box.innerHTML = `<p class="hint">${needName ? "<strong>이름 칸이 비어 있는 제품</strong>은 링크를 눌러 확인하고 이름을 적어주세요. " : ""}틀린 곳은 고쳐주세요.</p>` +
     importRows.map((r, i) => `<div class="import-row" data-index="${i}">
       <div class="import-photo">${thumbHtml(r.name, r.photo, "pphoto")}
         <label class="btn-small">사진<input type="file" accept="image/*" data-import-photo="${i}" hidden></label></div>
       <div class="import-fields">
-        <input data-imp="name" value="${esc(r.name)}" aria-label="제품명">
+        <input data-imp="name" class="${r.needsName && !r.name.trim() ? "need" : ""}" value="${esc(r.name)}" placeholder="${r.needsName ? "제품 이름을 적어주세요" : "제품명"}" aria-label="제품명">
+        ${r.needsName ? `<a class="iherb-link" href="${esc(r.url)}" target="_blank" rel="noopener">어떤 제품인지 링크 열어 확인 →</a>` : ""}
         <input data-imp="brand" value="${esc(r.brand)}" placeholder="브랜드" aria-label="브랜드">
         <div class="row2"><input data-imp="dose" value="${esc(r.dose)}" placeholder="함량" aria-label="함량">
           <input data-imp="count" type="number" min="0" value="${esc(r.count ?? "")}" placeholder="개수" aria-label="개수"></div>
@@ -528,17 +527,26 @@ function parseImport() {
     ...l,
     photo: null,
     duplicate: admin
-      ? state.products.some((p) => p.iherbId === l.iherbId)
-      : state.items.some((it) => it.iherbId === l.iherbId)
+      ? state.products.some((p) => (l.iherbId && p.iherbId === l.iherbId) || p.url === l.url)
+      : state.items.some((it) => (l.iherbId && it.iherbId === l.iherbId) || it.url === l.url)
   }));
   renderImportRows();
-  if (bad.length) toast(`읽을 수 없는 링크 ${bad.length}개: 짧은 주소(iherb.co)는 한 번 열어서 나온 전체 주소를 복사해주세요.`);
-  else if (!links.length) toast("아이허브 상품 링크를 찾지 못했어요. 주소에 /pr/ 이 들어 있어야 해요.");
+  const firstEmpty = $("#importResult input.need");
+  if (firstEmpty) firstEmpty.focus();
+  if (bad.length) toast(`제품 링크가 아닌 주소 ${bad.length}개는 건너뛰었어요. 제품 페이지에서 공유해주세요.`);
+  else if (!links.length) toast("아이허브 제품 링크를 찾지 못했어요. 제품 페이지에서 공유 → 링크 복사를 해주세요.");
 }
 
 async function saveImport() {
   const admin = isAdmin();
-  const rows = importRows.filter((r) => !r.duplicate && r.name.trim());
+  const unnamed = importRows.findIndex((r) => !r.duplicate && !r.name.trim());
+  if (unnamed !== -1) {
+    toast("이름이 비어 있는 제품이 있어요. 이름을 적거나 ✕로 빼주세요.");
+    const el = document.querySelector(`.import-row[data-index="${unnamed}"] [data-imp="name"]`);
+    if (el) { el.classList.add("need"); el.focus(); }
+    return;
+  }
+  const rows = importRows.filter((r) => !r.duplicate);
   if (!rows.length) { toast("저장할 제품이 없어요."); return; }
   const alsoMine = admin && $("#importAlsoMine") && $("#importAlsoMine").checked;
   const uid = state.user.uid;
@@ -566,6 +574,7 @@ async function saveImport() {
           days: [1, 2, 3, 4, 5, 6, 7],
           productId,
           iherbId: product.iherbId,
+          url: product.url,
           photo: admin ? null : product.photo,
           createdDay: epochDay(),
           createdAt: serverTimestamp()
@@ -735,6 +744,7 @@ function wire() {
     else if (t.dataset.imp) {
       const row = importRows[parseInt(t.closest(".import-row").dataset.index, 10)];
       row[t.dataset.imp] = t.dataset.imp === "count" ? (parseInt(t.value, 10) || null) : t.value;
+      if (t.dataset.imp === "name") t.classList.toggle("need", !!row.needsName && !t.value.trim());
     } else if (t.dataset.row && state.rotation) {
       const row = state.rotation.rows.find((r) => r.id === t.dataset.row);
       if (!row) return;

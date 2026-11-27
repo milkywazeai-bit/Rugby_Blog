@@ -149,6 +149,18 @@ export function parseIherbLinks(text) {
   for (const raw of urls) {
     let u;
     try { u = new URL(raw); } catch { continue; }
+    const short = isShortLink(u);
+    if (short) {
+      // App share links (iherb.co/XXXX) carry no product name; keep the link and let the person name it.
+      const key = "short:" + short;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      found.push({
+        iherbId: null, url: "https://iherb.co/" + short, needsName: true,
+        brand: "", name: "", dose: "", count: null, form: "", volume: ""
+      });
+      continue;
+    }
     if (!/(^|\.)iherb\.com$/i.test(u.hostname)) continue;
     const m = u.pathname.match(/\/pr\/([^/]+)\/(\d+)/i);
     if (!m) continue;
@@ -165,15 +177,28 @@ export function parseIherbLinks(text) {
   return found;
 }
 
+function isShortLink(u) {
+  if (!/^(www\.)?iherb\.co$/i.test(u.hostname)) return null;
+  const m = u.pathname.match(/^\/([A-Za-z0-9]{4,20})\/?$/);
+  return m ? m[1] : null;
+}
+
 export function findUnsupportedLinks(text) {
   const urls = String(text || "").match(/https?:\/\/[^\s"'<>]+/g) || [];
   return urls.filter((raw) => {
     try {
       const u = new URL(raw);
       const isIherb = /(^|\.)iherb\.(com|co)$/i.test(u.hostname);
-      return isIherb && !/\/pr\/[^/]+\/\d+/i.test(u.pathname);
+      return isIherb && !isShortLink(u) && !/\/pr\/[^/]+\/\d+/i.test(u.pathname);
     } catch { return false; }
   });
+}
+
+export function isIherbUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" && /(^|\.)iherb\.(com|co)$/i.test(u.hostname);
+  } catch { return false; }
 }
 
 export function iherbSearchUrl(name) {

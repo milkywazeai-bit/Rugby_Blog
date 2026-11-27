@@ -56,7 +56,16 @@ https://example.com/pr/not-iherb/1`;
   assert.equal(links[1].url.startsWith("https://kr.iherb.com/pr/"), true);
 });
 
-test("short or search links are reported as unsupported", () => {
+test("search links are reported as unsupported, short links are not", () => {
   const bad = findUnsupportedLinks("https://iherb.co/abc123 https://www.iherb.com/search?kw=fish https://www.iherb.com/pr/x-1-softgels/1");
-  assert.deepEqual(bad, ["https://iherb.co/abc123", "https://www.iherb.com/search?kw=fish"]);
+  assert.deepEqual(bad, ["https://www.iherb.com/search?kw=fish"]);
+});
+
+test("app share text gives a short link that needs a name", () => {
+  const text = "iHerb 에 있는 이 제품을 확인해 보세요 https://iherb.co/Hc9Pve6J?rcode=DFE1579&utm_medium=appshare";
+  const links = parseIherbLinks(text + "\n" + text);
+  assert.equal(links.length, 1);
+  assert.equal(links[0].url, "https://iherb.co/Hc9Pve6J");
+  assert.equal(links[0].needsName, true);
+  assert.equal(links[0].name, "");
 });

@@ -73,6 +73,7 @@
     <main>
       <section class="panel" data-panel="today">
         <div id="todayList"></div>
+        <div id="familyToday"></div>
       </section>
 
       <section class="panel" data-panel="rotation" hidden>
@@ -102,7 +103,7 @@
 
       <section class="panel" data-panel="inventory" hidden>
         <div class="rot-top">
-          <p class="hint">오늘 탭에서 완료를 누르면 그만큼 줄어들어요. 새로 산 통은 "새 통 추가"로 더하세요.</p>
+          <p class="hint" id="invHint">오늘 탭에서 완료를 누르면 그만큼 줄어들어요. 새로 산 통은 "새 통 추가"로 더하세요.</p>
           <button id="invRestock" class="btn-small primary" type="button">새 통 추가</button>
         </div>
         <div id="invList"></div>
@@ -128,6 +129,7 @@
           <div class="me-role" id="meRole"></div>
           <button id="claimAdmin" class="btn-primary" type="button" hidden>내가 관리자 하기 (처음 한 번만)</button>
         </div>
+        <div class="me-card" id="familyCard"></div>
         <div class="me-card">
           <div class="me-row"><strong>복용 시간</strong></div>
           <p class="hint">영양제를 먹는 아침·점심·저녁 시간이에요. 오늘 탭 순서와 알림이 이 시간을 따라가요.</p>

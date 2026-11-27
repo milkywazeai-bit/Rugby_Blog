@@ -62,6 +62,52 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // 가족: members share one inventory and see each other's progress today.
+    function familyMember(fid) {
+      return signedIn() && request.auth.uid in get(/databases/$(database)/documents/families/$(fid)).data.members;
+    }
+    match /families/{fid} {
+      allow read: if signedIn() && request.auth.uid in resource.data.members;
+      allow create: if signedIn()
+        && request.resource.data.members == [request.auth.uid]
+        && request.resource.data.createdBy == request.auth.uid
+        && shortString(request.resource.data.name, 30)
+        && request.resource.data.code is string && request.resource.data.code.size() == 6;
+      allow update: if signedIn() && (
+        // join with the invite code
+        (!(request.auth.uid in resource.data.members)
+          && request.resource.data.get('joinCode', '') == resource.data.code
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'names', 'joinCode'])
+          && request.resource.data.members.toSet() == resource.data.members.toSet().union([request.auth.uid].toSet())
+          && request.resource.data.members.size() <= 12)
+        // leave
+        || (request.auth.uid in resource.data.members
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'names'])
+          && request.resource.data.members.toSet() == resource.data.members.toSet().difference([request.auth.uid].toSet()))
+        // rename
+        || (request.auth.uid in resource.data.members
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
+          && shortString(request.resource.data.name, 30))
+      );
+      allow delete: if false;
+      match /inventory/{pid} {
+        allow read, write: if familyMember(fid);
+      }
+      match /status/{uid} {
+        allow read: if familyMember(fid);
+        allow write: if familyMember(fid) && request.auth.uid == uid;
+      }
+    }
+    // Invite code → family. Readable one code at a time, never listed.
+    match /familyCodes/{code} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn()
+        && getAfter(/databases/$(database)/documents/families/$(request.resource.data.familyId)).data.createdBy == request.auth.uid
+        && getAfter(/databases/$(database)/documents/families/$(request.resource.data.familyId)).data.code == code;
+      allow update, delete: if false;
+    }
+
     // Each person's own schedule, logs and rotation: only that person.
     match /users/{uid}/{document=**} {
       allow read, write: if signedIn() && request.auth.uid == uid;

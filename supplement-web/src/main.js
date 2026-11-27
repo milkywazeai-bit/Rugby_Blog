@@ -1,5 +1,5 @@
 import {
-  collection, doc, onSnapshot, query, where, setDoc, updateDoc, deleteDoc, getDocs,
+  collection, doc, onSnapshot, query, where, setDoc, updateDoc, deleteDoc, getDocs, getDoc, arrayUnion, arrayRemove,
   serverTimestamp, increment, writeBatch, deleteField, runTransaction
 } from "firebase/firestore";
 import {
@@ -157,7 +157,7 @@ function renderToday() {
     return;
   }
   const code = state.cycle ? cycleCode(state.cycle) : "";
-  const use = dailyUseAll({ cycle: state.cycle, extras: state.items });
+  const use = familyUse();
   const pendingAll = list.filter((e) => e.status === "PENDING").length;
   let html = pendingAll
     ? `<button type="button" class="btn-primary wide take-all" data-take-all>전체 복용 완료 <span>${pendingAll}개</span></button>`
@@ -228,7 +228,7 @@ async function setStatuses(keys, status) {
       }
     }
     for (const [pid, n] of Object.entries(change)) {
-      if (n) batch.set(doc(db, "users", uid, "inventory", pid), { count: increment(n), updatedAt: serverTimestamp() }, { merge: true });
+      if (n) batch.set(invDoc(pid), { count: increment(n), updatedAt: serverTimestamp() }, { merge: true });
     }
     await batch.commit();
     historyState.loadedAt = 0;
@@ -285,7 +285,7 @@ async function setAutoMode(on) {
 let autoRunning = false;
 async function runAutoFill() {
   const st = state.settings;
-  if (autoRunning || !state.user || !st || !st.autoMode || !state.cycleLoaded || !state.itemsLoaded || !state.logsLoaded) return;
+  if (autoRunning || !state.user || !st || !st.autoMode || !state.familyLoaded || !state.inventoryLoaded || !state.cycleLoaded || !state.itemsLoaded || !state.logsLoaded) return;
   const toDay = epochDay() - 1;
   const doneThrough = typeof st.autoDoneThrough === "number" ? st.autoDoneThrough : toDay;
   if (doneThrough >= toDay) return;
@@ -309,7 +309,7 @@ async function runAutoFill() {
         if (entry.productId) change[entry.productId] = (change[entry.productId] || 0) - entry.amount;
       }
       for (const [pid, n] of Object.entries(change)) {
-        tx.set(doc(db, "users", uid, "inventory", pid), { count: increment(n), updatedAt: serverTimestamp() }, { merge: true });
+        tx.set(invDoc(pid), { count: increment(n), updatedAt: serverTimestamp() }, { merge: true });
       }
       tx.set(settingsRef(), { autoDoneThrough: toDay, updatedAt: serverTimestamp() }, { merge: true });
       added = list.length;
@@ -326,7 +326,7 @@ async function runAutoFill() {
 }
 
 function cycleProgress(cycle, today) {
-  const use = dailyUseAll({ cycle, extras: state.items });
+  const use = familyUse();
   const items = cycle.items || [];
   const main = items.find((it) => it.meal === "lunch" && it.productId) || items.find((it) => it.productId) || null;
   const day = today - cycle.startDay + 1;
@@ -462,7 +462,7 @@ function renderRotation() {
   }
   const today = epochDay();
   const st = cycleProgress(cycle, today);
-  const use = dailyUseAll({ cycle, extras: state.items });
+  const use = familyUse();
   const mainName = st.main ? (productById(st.main.productId)?.name || st.main.label) : "";
   const ending = st.daysLeft === null ? ""
     : st.daysLeft <= 0
@@ -673,7 +673,7 @@ async function confirmCycle() {
       round, startDay: today, items, base: base || null, history, updatedAt: serverTimestamp()
     });
     for (const [pid, count] of Object.entries(stock)) {
-      batch.set(doc(db, "users", uid, "inventory", pid), { count, updatedAt: serverTimestamp() }, { merge: true });
+      batch.set(invDoc(pid), { count, updatedAt: serverTimestamp() }, { merge: true });
     }
     await batch.commit();
     setup = null;
@@ -876,12 +876,18 @@ async function savePlan() {
 // ---------- 재고 (inventory) ----------
 // users/{uid}/inventory/{productId}.count is the real count: set when a cycle or extra
 // is set up, raised by "새 통 추가", lowered by "완료" in 오늘.
-const WHERE_TAG = { cycle: "유산균 사이클", base: "4번", extra: "추가 영양제" };
+const WHERE_TAG = { cycle: "유산균 사이클", base: "4번", extra: "추가 영양제", family: "가족" };
 const LOW_DAYS = 10;
 
 function inventoryRows() {
   const where = productsInUse({ cycle: state.cycle, extras: state.items });
-  const use = dailyUseAll({ cycle: state.cycle, extras: state.items });
+  for (const m of otherMembers()) {
+    for (const pid of Object.keys((m.status && m.status.use) || {})) {
+      if (!where.has(pid)) where.set(pid, new Set());
+      where.get(pid).add("family");
+    }
+  }
+  const use = familyUse();
   const rows = [];
   for (const [pid, tags] of where) {
     const count = invCount(pid);
@@ -992,7 +998,7 @@ async function saveRestock() {
   let bottles = 0;
   for (const r of restock.rows) {
     if (!r.n) continue;
-    batch.set(doc(db, "users", uid, "inventory", r.pid), { count: restockLeft(r.pid) + r.n * Math.max(1, r.per), updatedAt: serverTimestamp() }, { merge: true });
+    batch.set(invDoc(r.pid), { count: restockLeft(r.pid) + r.n * Math.max(1, r.per), updatedAt: serverTimestamp() }, { merge: true });
     bottles += r.n;
   }
   if (!bottles) { toast("산 통 수를 + 버튼으로 올려주세요."); return; }
@@ -1006,7 +1012,7 @@ async function saveRestock() {
 
 // ----- exact counts -----
 function openInventoryEdit(pids, title = "개수 수정") {
-  const use = dailyUseAll({ cycle: state.cycle, extras: state.items });
+  const use = familyUse();
   openSheet(title, `<form id="stockForm">
     <p class="hint">지금 실제로 남아 있는 개수를 적어주세요.</p>
     ${pids.map((pid) => `<div class="cy-stock">${productRow(pid)}
@@ -1023,7 +1029,7 @@ async function saveStock(form) {
   const uid = state.user.uid;
   const batch = writeBatch(db);
   form.querySelectorAll("input[type=number]").forEach((inp) => {
-    if (inp.value !== "") batch.set(doc(db, "users", uid, "inventory", inp.name), { count: Math.max(0, parseInt(inp.value, 10) || 0), updatedAt: serverTimestamp() }, { merge: true });
+    if (inp.value !== "") batch.set(invDoc(inp.name), { count: Math.max(0, parseInt(inp.value, 10) || 0), updatedAt: serverTimestamp() }, { merge: true });
   });
   try {
     await batch.commit();
@@ -1223,7 +1229,7 @@ async function saveItemForm(form) {
     else batch.set(doc(collection(db, "users", uid, "items")), { ...data, createdDay: epochDay(), createdAt: serverTimestamp() });
     const stockInput = $("#fStock");
     if (pid && stockInput && stockInput.value !== "") {
-      batch.set(doc(db, "users", uid, "inventory", pid), { count: Math.max(0, parseInt(stockInput.value, 10) || 0), updatedAt: serverTimestamp() }, { merge: true });
+      batch.set(invDoc(pid), { count: Math.max(0, parseInt(stockInput.value, 10) || 0), updatedAt: serverTimestamp() }, { merge: true });
     }
     await batch.commit();
     closeSheet();
@@ -1423,7 +1429,7 @@ async function saveSetAdd(form) {
     });
     const stockInput = form.querySelector(`[data-set-stock="${i}"]`);
     if (stockInput && stockInput.value !== "") {
-      batch.set(doc(db, "users", uid, "inventory", it.productId), { count: Math.max(0, parseInt(stockInput.value, 10) || 0), updatedAt: serverTimestamp() }, { merge: true });
+      batch.set(invDoc(it.productId), { count: Math.max(0, parseInt(stockInput.value, 10) || 0), updatedAt: serverTimestamp() }, { merge: true });
     }
   }
   try {
@@ -1431,6 +1437,207 @@ async function saveSetAdd(form) {
     closeSheet();
     toast(`${s.title}: ${picked.length}가지를 추가 영양제에 넣었어요.`);
   } catch (e) { fail(e); }
+}
+
+// ---------- 가족 ----------
+// A family shares one inventory (families/{id}/inventory): whoever takes a dose,
+// it comes out of the same count. Schedules stay personal; each member publishes
+// today's progress (families/{id}/status/{uid}) so the others can see it.
+let famUnsubs = [];
+const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+function invDoc(pid) {
+  return state.family
+    ? doc(db, "families", state.family.id, "inventory", pid)
+    : doc(db, "users", state.user.uid, "inventory", pid);
+}
+
+function myName() {
+  const u = state.user;
+  return (u.displayName || (u.email || "").split("@")[0] || "가족").slice(0, 20);
+}
+
+function otherMembers() {
+  if (!state.family) return [];
+  return (state.family.members || []).filter((uid) => uid !== state.user.uid).map((uid) => ({
+    uid, name: (state.family.names || {})[uid] || "가족", status: state.familyStatus[uid] || null
+  }));
+}
+
+// Units per day of each product across the whole family.
+function familyUse() {
+  const use = { ...dailyUseAll({ cycle: state.cycle, extras: state.items }) };
+  for (const m of otherMembers()) {
+    for (const [pid, n] of Object.entries((m.status && m.status.use) || {})) {
+      if (typeof n === "number") use[pid] = (use[pid] || 0) + n;
+    }
+  }
+  return use;
+}
+
+function subscribeFamilyData() {
+  famUnsubs.forEach((u) => u());
+  famUnsubs = [];
+  const uid = state.user.uid;
+  const fid = state.family ? state.family.id : null;
+  state.inventoryLoaded = false;
+  state.familyStatus = {};
+  lastStatusJson = "";
+  const invCol = fid ? collection(db, "families", fid, "inventory") : collection(db, "users", uid, "inventory");
+  famUnsubs.push(onSnapshot(invCol, (s) => {
+    const inv = {};
+    s.docs.forEach((d) => { const c = d.data().count; if (typeof c === "number") inv[d.id] = c; });
+    state.inventory = inv;
+    state.inventoryLoaded = true;
+    migrateStock();
+    runAutoFill();
+    renderAll();
+  }, fail));
+  if (fid) {
+    famUnsubs.push(onSnapshot(collection(db, "families", fid, "status"), (s) => {
+      const st = {};
+      s.docs.forEach((d) => { st[d.id] = d.data(); });
+      state.familyStatus = st;
+      renderAll();
+    }, fail));
+  }
+}
+
+// What the rest of the family sees about me today.
+let lastStatusJson = "";
+let statusTimer = null;
+function publishStatus() {
+  if (!state.family || !state.cycleLoaded || !state.itemsLoaded || !state.logsLoaded) return;
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(async () => {
+    if (!state.family) return;
+    const use = {};
+    for (const [pid, n] of Object.entries(dailyUseAll({ cycle: state.cycle, extras: state.items }))) use[pid] = Math.round(n * 1000) / 1000;
+    const payload = {
+      name: myName(), day: epochDay(), use,
+      entries: todayEntries().map((e) => ({ n: entryName(e), m: e.meal, s: e.status }))
+    };
+    const json = JSON.stringify(payload);
+    if (json === lastStatusJson) return;
+    lastStatusJson = json;
+    try {
+      await setDoc(doc(db, "families", state.family.id, "status", state.user.uid), { ...payload, updatedAt: serverTimestamp() });
+    } catch (e) { lastStatusJson = ""; console.warn(e); }
+  }, 600);
+}
+
+function renderFamilyToday() {
+  const box = $("#familyToday");
+  const others = otherMembers();
+  if (!others.length) { box.innerHTML = ""; return; }
+  const today = epochDay();
+  box.innerHTML = `<h3 class="sub-head fam-head">가족 오늘</h3>` + others.map((m) => {
+    const st = m.status;
+    if (!st || st.day !== today) {
+      return `<div class="fam-card"><div class="fam-top"><strong>${esc(m.name)}</strong><span class="chip">오늘 기록 없음</span></div></div>`;
+    }
+    const list = st.entries || [];
+    const done = list.filter((e) => e.s === "TAKEN").length;
+    const pending = MEALS.map((meal) => ({ meal, names: list.filter((e) => e.m === meal.key && e.s === "PENDING").map((e) => e.n) })).filter((x) => x.names.length);
+    return `<div class="fam-card">
+      <div class="fam-top"><strong>${esc(m.name)}</strong><span class="chip ${done === list.length && list.length ? "taken" : ""}">${list.length ? `${done}/${list.length} 먹음` : "먹을 것 없음"}</span></div>
+      ${pending.length ? pending.map((x) => `<div class="fam-pending"><span class="chip meal">${x.meal.label}</span>${esc(x.names.join(", "))}</div>`).join("")
+        : list.length ? `<p class="mc-note">오늘 다 챙겼어요 ✓</p>` : ""}
+    </div>`;
+  }).join("");
+}
+
+function renderFamily() {
+  const box = $("#familyCard");
+  if (!box) return;
+  if (!state.familyLoaded) { box.innerHTML = `<p class="mc-note">불러오는 중이에요…</p>`; return; }
+  const f = state.family;
+  if (!f) {
+    box.innerHTML = `<div class="me-row"><strong>가족</strong></div>
+      <p class="hint">가족을 만들면 <strong>재고를 하나로 합쳐서</strong> 같이 써요. 누가 완료를 눌러도 같은 재고에서 빠지고, 오늘 탭에서 서로 먹었는지 볼 수 있어요. 먹는 스케줄은 각자 따로예요.</p>
+      <div class="fam-form"><input id="famName" maxlength="30" placeholder="가족 이름 (예: 우리 가족)" aria-label="가족 이름"><button type="button" class="btn-small primary" id="famCreate">가족 만들기</button></div>
+      <div class="fam-form"><input id="famCode" maxlength="6" placeholder="초대 코드 6자리" aria-label="초대 코드" autocapitalize="characters" autocomplete="off"><button type="button" class="btn-small" id="famJoin">들어가기</button></div>`;
+    return;
+  }
+  const names = f.names || {};
+  box.innerHTML = `<div class="me-row"><strong>가족 · ${esc(f.name || "우리 가족")}</strong><span class="chip">${(f.members || []).length}명</span></div>
+    <div class="fam-members">${(f.members || []).map((uid) => `<span class="chip ${uid === state.user.uid ? "taken" : ""}">${esc(names[uid] || "가족")}${uid === state.user.uid ? " (나)" : ""}</span>`).join("")}</div>
+    <p class="hint">가족 재고를 같이 써요. 아래 코드를 가족에게 알려주면 내 정보 → 가족에서 넣고 들어올 수 있어요.</p>
+    <div class="fam-code"><span id="famCodeText">${esc(f.code || "")}</span><button type="button" class="btn-small" id="famCopy">코드 복사</button>${navigator.share ? `<button type="button" class="btn-small" id="famShare">공유</button>` : ""}</div>
+    <button type="button" class="btn-danger-text" id="famLeave">가족에서 나가기</button>`;
+}
+
+function newCode() {
+  const a = new Uint32Array(6);
+  crypto.getRandomValues(a);
+  return [...a].map((n) => CODE_CHARS[n % CODE_CHARS.length]).join("");
+}
+
+// My own counts join the family's: same product → added together.
+async function mergeMyInventory(fid) {
+  const uid = state.user.uid;
+  const snap = await getDocs(collection(db, "users", uid, "inventory"));
+  if (snap.empty) return 0;
+  const batch = writeBatch(db);
+  snap.docs.forEach((d) => {
+    const c = d.data().count;
+    if (typeof c === "number" && c > 0) batch.set(doc(db, "families", fid, "inventory", d.id), { count: increment(c), updatedAt: serverTimestamp() }, { merge: true });
+    batch.delete(d.ref);
+  });
+  await batch.commit();
+  return snap.size;
+}
+
+async function createFamily() {
+  const name = ($("#famName").value || "").trim() || "우리 가족";
+  const uid = state.user.uid;
+  try {
+    const ref = doc(collection(db, "families"));
+    const code = newCode();
+    const batch = writeBatch(db);
+    batch.set(ref, { name, members: [uid], names: { [uid]: myName() }, code, createdBy: uid, createdAt: serverTimestamp() });
+    batch.set(doc(db, "familyCodes", code), { familyId: ref.id });
+    await batch.commit();
+    await mergeMyInventory(ref.id);
+    toast(`가족을 만들었어요. 초대 코드는 ${code}예요.`);
+  } catch (e) { fail(e); }
+}
+
+async function joinFamily() {
+  const code = ($("#famCode").value || "").trim().toUpperCase();
+  if (!/^[A-Z0-9]{6}$/.test(code)) { toast("초대 코드 6자리를 넣어주세요."); return; }
+  const uid = state.user.uid;
+  try {
+    const c = await getDoc(doc(db, "familyCodes", code));
+    if (!c.exists()) { toast("그런 초대 코드가 없어요. 다시 확인해주세요."); return; }
+    const fid = c.data().familyId;
+    await updateDoc(doc(db, "families", fid), { members: arrayUnion(uid), [`names.${uid}`]: myName(), joinCode: code });
+    await mergeMyInventory(fid);
+    toast("가족에 들어왔어요. 내 재고도 가족 재고에 합쳤어요.");
+  } catch (e) { fail(e); }
+}
+
+async function leaveFamily() {
+  if (!state.family) return;
+  if (!confirm("가족에서 나갈까요? 가족 재고는 가족에게 남고, 내 재고는 비어 있는 상태로 시작해요.")) return;
+  const uid = state.user.uid;
+  const fid = state.family.id;
+  try {
+    await deleteDoc(doc(db, "families", fid, "status", uid)).catch(() => {});
+    await updateDoc(doc(db, "families", fid), { members: arrayRemove(uid), [`names.${uid}`]: deleteField() });
+    toast("가족에서 나왔어요.");
+  } catch (e) { fail(e); }
+}
+
+async function copyFamilyCode(share) {
+  const code = state.family && state.family.code;
+  if (!code) return;
+  const text = `영양제 스케줄러 가족 초대 코드: ${code}\n${location.origin}`;
+  try {
+    if (share && navigator.share) { await navigator.share({ text }); return; }
+    await navigator.clipboard.writeText(code);
+    toast("초대 코드를 복사했어요.");
+  } catch { toast(`초대 코드: ${code}`); }
 }
 
 // ---------- me ----------
@@ -1446,6 +1653,7 @@ function renderMe() {
   if (state.tab === "me") renderHistory();
   renderMealTimes();
   renderNotify();
+  renderFamily();
 }
 
 function renderMealTimes() {
@@ -1498,6 +1706,11 @@ function renderAll() {
   renderExtras();
   renderSetOffers();
   renderInventory();
+  renderFamilyToday();
+  $("#invHint").textContent = state.family
+    ? `${state.family.name || "가족"} 재고예요. 가족 누가 완료를 눌러도 같이 줄어들어요. 새로 산 통은 "새 통 추가"로 더하세요.`
+    : `오늘 탭에서 완료를 누르면 그만큼 줄어들어요. 새로 산 통은 "새 통 추가"로 더하세요.`;
+  publishStatus();
   if (admin) renderAdmin();
   renderMe();
 }
@@ -1869,12 +2082,16 @@ function subscribe(uid) {
     runAutoFill();
     renderAll();
   }, fail));
-  unsubs.push(onSnapshot(collection(db, "users", uid, "inventory"), (s) => {
-    const inv = {};
-    s.docs.forEach((d) => { const c = d.data().count; if (typeof c === "number") inv[d.id] = c; });
-    state.inventory = inv;
-    state.inventoryLoaded = true;
-    migrateStock();
+  // Metadata changes too: a family that was just created or joined is used only once the
+  // server has it, or reading its inventory would be refused for a moment.
+  unsubs.push(onSnapshot(query(collection(db, "families"), where("members", "array-contains", uid)), { includeMetadataChanges: true }, (s) => {
+    if (s.metadata.hasPendingWrites) return;
+    const d = s.docs[0];
+    const fam = d ? { id: d.id, ...d.data() } : null;
+    const changed = !state.familyLoaded || (state.family ? state.family.id : null) !== (fam ? fam.id : null);
+    state.family = fam;
+    state.familyLoaded = true;
+    if (changed) subscribeFamilyData();
     renderAll();
   }, fail));
   unsubs.push(onSnapshot(query(collection(db, "users", uid, "logs"), where("day", ">=", today - 6)), (s) => {
@@ -1904,7 +2121,7 @@ function subscribe(uid) {
 // Move them into 재고 once, without overwriting counts that are already there.
 let migrated = false;
 async function migrateStock() {
-  if (migrated || !state.user || !state.cycleLoaded || !state.inventoryLoaded || !state.itemsLoaded) return;
+  if (migrated || !state.user || !state.familyLoaded || !state.cycleLoaded || !state.inventoryLoaded || !state.itemsLoaded) return;
   migrated = true;
   const uid = state.user.uid;
   const today = epochDay();
@@ -1915,7 +2132,7 @@ async function migrateStock() {
     const use = dailyUse(allItems(cy));
     for (const [pid, entry] of Object.entries(cy.stock)) {
       if (invCount(pid) !== null) continue;
-      batch.set(doc(db, "users", uid, "inventory", pid), { count: remaining(entry, use[pid] || 0, today) ?? 0, updatedAt: serverTimestamp() }, { merge: true });
+      batch.set(invDoc(pid), { count: remaining(entry, use[pid] || 0, today) ?? 0, updatedAt: serverTimestamp() }, { merge: true });
       writes++;
     }
     batch.update(doc(db, "users", uid, "meta", "cycle"), { stock: deleteField() });
@@ -1923,7 +2140,7 @@ async function migrateStock() {
   }
   for (const it of state.items) {
     if (!it.productId || typeof it.stockCount !== "number" || invCount(it.productId) !== null) continue;
-    batch.set(doc(db, "users", uid, "inventory", it.productId), { count: it.stockCount, updatedAt: serverTimestamp() }, { merge: true });
+    batch.set(invDoc(it.productId), { count: it.stockCount, updatedAt: serverTimestamp() }, { merge: true });
     writes++;
   }
   if (writes) { try { await batch.commit(); } catch (e) { console.error(e); } }
@@ -1932,6 +2149,8 @@ async function migrateStock() {
 function unsubscribeAll() {
   unsubs.forEach((u) => u());
   unsubs = [];
+  famUnsubs.forEach((u) => u());
+  famUnsubs = [];
 }
 
 // ---------- events ----------
@@ -1950,6 +2169,15 @@ function wire() {
   document.querySelectorAll(".tab-btn").forEach((b) => b.addEventListener("click", () => switchTab(b.dataset.tab)));
   $("#importOpen").addEventListener("click", openImportSheet);
   $("#shotOpen").addEventListener("click", openShotSheet);
+  $("#familyCard").addEventListener("click", (e) => {
+    const t = e.target.closest("button");
+    if (!t) return;
+    if (t.id === "famCreate") createFamily();
+    else if (t.id === "famJoin") joinFamily();
+    else if (t.id === "famLeave") leaveFamily();
+    else if (t.id === "famCopy") copyFamilyCode(false);
+    else if (t.id === "famShare") copyFamilyCode(true);
+  });
   $("#extraAdd").addEventListener("click", openProductPicker);
   $("#invRestock").addEventListener("click", () => openRestockSheet());
   document.querySelectorAll("[data-history]").forEach((b) => b.addEventListener("click", () => {
@@ -2088,6 +2316,7 @@ function boot() {
     state.adminUids = null;
     state.products = []; state.sets = []; state.items = []; state.logs = {}; state.plan = null; state.planLoaded = false; state.cycle = null; state.cycleLoaded = false;
     state.itemsLoaded = false; state.inventory = {}; state.inventoryLoaded = false; state.logsLoaded = false; state.settings = null;
+    state.family = null; state.familyLoaded = false; state.familyStatus = {};
     historyState.logs = null; historyState.loadedAt = 0; historyState.loading = false;
     migrated = false;
     if (!user) { closeSheet(); showScreen("screenLogin"); return; }

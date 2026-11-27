@@ -4,7 +4,7 @@ import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { initializeApp, deleteApp } from "firebase/app";
 import { getAuth, connectAuthEmulator, signInWithCredential, GoogleAuthProvider } from "firebase/auth";
-import { getFirestore, connectFirestoreEmulator, doc, setDoc, getDoc, getDocs, collection, deleteDoc, updateDoc } from "firebase/firestore";
+import { getFirestore, connectFirestoreEmulator, doc, setDoc, getDoc, getDocs, collection, deleteDoc, updateDoc, writeBatch, arrayUnion, arrayRemove, deleteField, query, where } from "firebase/firestore";
 
 const PROJECT = "demo-supplement";
 
@@ -25,7 +25,7 @@ async function denied(promise) {
   await assert.rejects(promise, (e) => e.code === "permission-denied");
 }
 
-let owner, friend, stranger;
+let owner, friend, stranger, third;
 
 before(async () => {
   await fetch(`http://127.0.0.1:8080/emulator/v1/projects/${PROJECT}/databases/(default)/documents`, { method: "DELETE" });
@@ -33,6 +33,7 @@ before(async () => {
   owner = await client("owner", "owner-uid");
   friend = await client("friend", "friend-uid");
   stranger = await client("stranger", null);
+  third = await client("third", "third-uid");
 });
 
 test("a signed-out visitor cannot read anything", async () => {
@@ -91,6 +92,43 @@ test("only the admin edits 상황별 세트; everyone signed in reads them", asy
   await denied(getDoc(doc(stranger.db, "sets", "s1")));
 });
 
+test("가족: invite code to join, shared inventory and status, outsiders kept out", async () => {
+  const fam = doc(owner.db, "families", "fam1");
+  const b = writeBatch(owner.db);
+  b.set(fam, { name: "우리 가족", members: [owner.uid], names: { [owner.uid]: "엄마" }, code: "ABC234", createdBy: owner.uid });
+  b.set(doc(owner.db, "familyCodes", "ABC234"), { familyId: "fam1" });
+  await b.commit();
+  // someone else cannot claim a code for a family they did not make
+  await denied(setDoc(doc(friend.db, "familyCodes", "ZZZ999"), { familyId: "fam1" }));
+  // codes can be looked up one at a time, never listed
+  assert.equal((await getDoc(doc(friend.db, "familyCodes", "ABC234"))).data().familyId, "fam1");
+  await denied(getDocs(collection(friend.db, "familyCodes")));
+  // not a member yet: cannot read the family or its inventory
+  await denied(getDoc(doc(friend.db, "families", "fam1")));
+  await denied(getDoc(doc(friend.db, "families", "fam1", "inventory", "p1")));
+  // a wrong code does not let you in; the right one does
+  await denied(updateDoc(doc(friend.db, "families", "fam1"), { members: arrayUnion(friend.uid), [`names.${friend.uid}`]: "아빠", joinCode: "WRONG1" }));
+  await denied(updateDoc(doc(friend.db, "families", "fam1"), { members: arrayUnion(friend.uid, third.uid), joinCode: "ABC234" }));
+  await updateDoc(doc(friend.db, "families", "fam1"), { members: arrayUnion(friend.uid), [`names.${friend.uid}`]: "아빠", joinCode: "ABC234" });
+  const mine = await getDocs(query(collection(friend.db, "families"), where("members", "array-contains", friend.uid)));
+  assert.equal(mine.size, 1);
+  // shared inventory: both members read and write
+  await setDoc(doc(owner.db, "families", "fam1", "inventory", "p1"), { count: 60 });
+  await setDoc(doc(friend.db, "families", "fam1", "inventory", "p1"), { count: 59 });
+  assert.equal((await getDoc(doc(owner.db, "families", "fam1", "inventory", "p1"))).data().count, 59);
+  // status: everyone reads, each writes only their own
+  await setDoc(doc(friend.db, "families", "fam1", "status", friend.uid), { day: 1, entries: [] });
+  await denied(setDoc(doc(friend.db, "families", "fam1", "status", owner.uid), { day: 1, entries: [] }));
+  assert.equal((await getDoc(doc(owner.db, "families", "fam1", "status", friend.uid))).data().day, 1);
+  // an outsider still sees nothing
+  await denied(getDoc(doc(third.db, "families", "fam1", "inventory", "p1")));
+  await denied(getDocs(query(collection(third.db, "families"), where("members", "array-contains", owner.uid))));
+  // a member cannot remove someone else, but can leave
+  await denied(updateDoc(doc(friend.db, "families", "fam1"), { members: arrayRemove(owner.uid) }));
+  await updateDoc(doc(friend.db, "families", "fam1"), { members: arrayRemove(friend.uid), [`names.${friend.uid}`]: deleteField() });
+  await denied(getDoc(doc(friend.db, "families", "fam1", "inventory", "p1")));
+});
+
 test("personal data is private to its owner", async () => {
   await setDoc(doc(owner.db, "users", owner.uid, "items", "i1"), { name: "Mine" });
   await setDoc(doc(owner.db, "users", owner.uid, "meta", "rotation"), { rows: [], notes: "secret" });
@@ -102,5 +140,5 @@ test("personal data is private to its owner", async () => {
 });
 
 test("cleanup", async () => {
-  await Promise.all([owner, friend, stranger].map((c) => deleteApp(c.app)));
+  await Promise.all([owner, friend, stranger, third].map((c) => deleteApp(c.app)));
 });

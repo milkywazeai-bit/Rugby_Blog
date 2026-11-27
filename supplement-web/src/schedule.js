@@ -122,3 +122,16 @@ export function historyGroups(logs, by) {
     products: [...g.products.values()].sort((a, b) => b.times - a.times)
   }));
 }
+
+// 자동모드: doses from `fromDay` to `toDay` (inclusive) that nobody marked
+// (no log at all) count as taken. `logged` holds "day_key" ids that already
+// have a log, so a 건너뛰기 or an earlier 완료 is never touched.
+export function autoTakeList({ cycle, extras, fromDay, toDay, logged }) {
+  const out = [];
+  for (let day = fromDay; day <= toDay; day++) {
+    for (const e of dayEntries({ cycle, extras, day })) {
+      if (!logged.has(day + "_" + e.key)) out.push({ day, entry: e });
+    }
+  }
+  return out;
+}

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  dayEntries, dailyUseAll, daysLeft, productsInUse, sectionOf, historyGroups, weekStart, monthKey, isoDow, MEAL_MINUTES
+  dayEntries, dailyUseAll, daysLeft, productsInUse, sectionOf, historyGroups, weekStart, monthKey, isoDow, MEAL_MINUTES, autoTakeList
 } from "../src/schedule.js";
 
 const DAY = 20784; // 2026-11-27, a Friday
@@ -86,4 +86,19 @@ test("history groups by day, week and month with cycles and products", () => {
   assert.equal(byMonth[0].key, 202611);
   assert.equal(byMonth[1].key, monthKey(DAY - 30));
   assert.deepEqual(byMonth[1].cycles, [{ code: "3-1", title: "사이클 3" }]);
+});
+
+test("autoTakeList fills only doses with no log, across days", () => {
+  const cycle = { startDay: DAY - 1, items: [{ meal: "lunch", productId: "p1", amount: "1캡슐" }], base: null };
+  const extras = [{ id: "x", productId: "p2", perDose: 2, timeMinutes: 480, days: [1, 2, 3, 4, 5, 6, 7] }];
+  const logged = new Set([`${DAY - 1}_ex-x`]);
+  const list = autoTakeList({ cycle, extras, fromDay: DAY - 2, toDay: DAY - 1, logged });
+  const ids = list.map((x) => x.day + "_" + x.entry.key).sort();
+  // DAY-2: cycle not started yet, only the extra. DAY-1: the extra already has a log.
+  assert.deepEqual(ids, [`${DAY - 2}_ex-x`, `${DAY - 1}_cy-lunch-p1`].sort());
+  assert.equal(list.find((x) => x.entry.key === "ex-x").entry.amount, 2);
+});
+
+test("autoTakeList returns nothing for an empty range", () => {
+  assert.deepEqual(autoTakeList({ cycle: null, extras: [], fromDay: DAY, toDay: DAY - 1, logged: new Set() }), []);
 });

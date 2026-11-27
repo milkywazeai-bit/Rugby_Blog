@@ -55,6 +55,10 @@
         <h1>영양제 스케줄러</h1>
         <div class="date" id="todayLabel"></div>
       </div>
+      <div class="top-right">
+      <button id="autoToggle" class="auto-toggle" type="button" aria-pressed="false" aria-label="자동모드 설정">
+        <span class="auto-label">자동</span><span class="auto-switch" aria-hidden="true"><span></span></span><span class="auto-state" id="autoState">꺼짐</span>
+      </button>
       <div class="ring-wrap">
         <svg width="58" height="58" viewBox="0 0 58 58" role="img" aria-label="오늘 복용률">
           <circle cx="29" cy="29" r="24" fill="none" stroke="var(--border)" stroke-width="6"></circle>
@@ -62,6 +66,7 @@
           <text id="ringPct" x="29" y="33" text-anchor="middle" class="ring-pct" font-size="14" fill="var(--ink)">0%</text>
         </svg>
         <div class="ring-label">오늘</div>
+      </div>
       </div>
     </header>
 

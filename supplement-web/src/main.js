@@ -1,6 +1,6 @@
 import {
   collection, doc, onSnapshot, query, where, setDoc, updateDoc, deleteDoc, getDocs,
-  serverTimestamp, increment, writeBatch, deleteField
+  serverTimestamp, increment, writeBatch, deleteField, runTransaction
 } from "firebase/firestore";
 import {
   initFirebase, isConfigured, useEmulator, watchAuth, signInWithGoogle, signInTestUser, logOut, db
@@ -12,7 +12,7 @@ import {
   slotOptions, baseSlots, baseItemsFromPicks, defaultBasePicks
 } from "./rotation.js";
 import {
-  dayEntries, dailyUseAll, daysLeft, productsInUse, sectionOf, SECTIONS, historyGroups, extraAmount
+  dayEntries, dailyUseAll, daysLeft, productsInUse, sectionOf, SECTIONS, historyGroups, extraAmount, autoTakeList
 } from "./schedule.js";
 
 const DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"];
@@ -156,12 +156,16 @@ function renderToday() {
   }
   const code = state.cycle ? cycleCode(state.cycle) : "";
   const use = dailyUseAll({ cycle: state.cycle, extras: state.items });
-  let html = "";
+  const pendingAll = list.filter((e) => e.status === "PENDING").length;
+  let html = pendingAll
+    ? `<button type="button" class="btn-primary wide take-all" data-take-all>전체 복용 완료 <span>${pendingAll}개</span></button>`
+    : `<div class="all-done">오늘 영양제를 다 챙겼어요 ✓</div>`;
   for (const sec of SECTIONS) {
     const g = list.filter((e) => sectionOf(e.minutes) === sec.key);
     if (!g.length) continue;
     const done = g.filter((e) => e.status !== "PENDING").length;
-    html += `<section class="section"><div class="section-head"><span class="label">${sec.label}</span><span class="count">${done}/${g.length}</span></div>`;
+    const secBtn = done < g.length ? `<button type="button" class="sec-take" data-take-section="${sec.key}">${sec.label} 모두 완료</button>` : "";
+    html += `<section class="section"><div class="section-head"><span class="label">${sec.label}</span><span class="count">${done}/${g.length}</span>${secBtn}</div>`;
     for (const e of g) {
       const p = e.productId ? productById(e.productId) : null;
       const it = e.itemId ? state.items.find((x) => x.id === e.itemId) : null;
@@ -190,31 +194,132 @@ function renderToday() {
   box.innerHTML = html;
 }
 
-async function setStatus(key, status) {
+function logData(day, e, status, extra = {}) {
+  return {
+    day, key: e.key, kind: e.kind, productId: e.productId || null, name: entryName(e), amount: e.amount, status, at: serverTimestamp(),
+    ...(e.kind === "cycle" && state.cycle ? { cycleCode: cycleCode(state.cycle), cycleTitle: currentCycleTitle() } : {}),
+    ...extra
+  };
+}
+
+// Marks one or more of today's doses in a single write, moving stock with them.
+async function setStatuses(keys, status) {
   const uid = state.user.uid;
   const day = epochDay();
-  const e = todayEntries().find((x) => x.key === key);
-  if (!e) return;
-  const prev = state.logs[day + "_" + key];
+  const entries = todayEntries().filter((x) => keys.includes(x.key));
+  if (!entries.length) return;
   try {
     const batch = writeBatch(db);
-    const logRef = doc(db, "users", uid, "logs", `${day}_${key}`);
-    const invRef = e.productId ? doc(db, "users", uid, "inventory", e.productId) : null;
-    const change = (n) => { if (invRef) batch.set(invRef, { count: increment(n), updatedAt: serverTimestamp() }, { merge: true }); };
-    if (status === null) {
-      batch.delete(logRef);
-      if (prev === "TAKEN") change(e.amount);
-    } else {
-      batch.set(logRef, {
-        day, key, kind: e.kind, productId: e.productId || null, name: entryName(e), amount: e.amount, status, at: serverTimestamp(),
-        ...(e.kind === "cycle" && state.cycle ? { cycleCode: cycleCode(state.cycle), cycleTitle: currentCycleTitle() } : {})
-      });
-      if (status === "TAKEN" && prev !== "TAKEN") change(-e.amount);
-      if (status !== "TAKEN" && prev === "TAKEN") change(e.amount);
+    const change = {};
+    const add = (pid, n) => { if (pid) change[pid] = (change[pid] || 0) + n; };
+    for (const e of entries) {
+      const prev = state.logs[day + "_" + e.key];
+      const logRef = doc(db, "users", uid, "logs", `${day}_${e.key}`);
+      if (status === null) {
+        batch.delete(logRef);
+        if (prev === "TAKEN") add(e.productId, e.amount);
+      } else {
+        batch.set(logRef, logData(day, e, status));
+        if (status === "TAKEN" && prev !== "TAKEN") add(e.productId, -e.amount);
+        if (status !== "TAKEN" && prev === "TAKEN") add(e.productId, e.amount);
+      }
+    }
+    for (const [pid, n] of Object.entries(change)) {
+      if (n) batch.set(doc(db, "users", uid, "inventory", pid), { count: increment(n), updatedAt: serverTimestamp() }, { merge: true });
     }
     await batch.commit();
     historyState.loadedAt = 0;
+    if (entries.length > 1 && status === "TAKEN") toast(`${entries.length}개를 완료했어요.`);
   } catch (err) { fail(err); }
+}
+function setStatus(key, status) { return setStatuses([key], status); }
+
+function takePending(sectionKey) {
+  const keys = todayEntries()
+    .filter((e) => e.status === "PENDING" && (!sectionKey || sectionOf(e.minutes) === sectionKey))
+    .map((e) => e.key);
+  if (keys.length) setStatuses(keys, "TAKEN");
+}
+
+// ---------- 자동모드 ----------
+// Once a day has passed, doses nobody tapped count as taken and come out of stock.
+// Runs when the app is open (there is no server); a day missed is caught up on next open.
+const AUTO_MAX_DAYS = 30;
+function settingsRef() { return doc(db, "users", state.user.uid, "meta", "settings"); }
+
+function renderAutoToggle() {
+  const on = !!(state.settings && state.settings.autoMode);
+  const b = $("#autoToggle");
+  b.classList.toggle("on", on);
+  b.setAttribute("aria-pressed", on);
+  $("#autoState").textContent = on ? "켜짐" : "꺼짐";
+}
+
+function openAutoSheet() {
+  const on = !!(state.settings && state.settings.autoMode);
+  openSheet("자동모드", `
+    <p class="mc-note">자동모드를 켜면, 하루가 지났을 때 <strong>완료나 건너뛰기를 누르지 않은 영양제를 모두 먹은 걸로</strong> 처리하고 재고에서 빼요.</p>
+    <ul class="auto-points">
+      <li>매번 완료를 누르지 않아도 재고가 맞게 줄어들어요.</li>
+      <li>안 먹은 날은 그날 안에 <strong>건너뛰기</strong>를 눌러 두세요. 건너뛴 건 빼지 않아요.</li>
+      <li>앱을 열 때 처리돼요. 며칠 만에 열어도 그동안 지난 날을 한꺼번에 처리해요(최대 ${AUTO_MAX_DAYS}일).</li>
+      <li>켠 날(오늘)부터 적용돼요. 지난 날은 건드리지 않아요.</li>
+    </ul>
+    <div class="sheet-actions"><button type="button" class="btn-primary wide" id="autoSet" data-on="${on ? "0" : "1"}">${on ? "자동모드 끄기" : "자동모드 켜기"}</button></div>`);
+}
+
+async function setAutoMode(on) {
+  const today = epochDay();
+  try {
+    await setDoc(settingsRef(), on
+      ? { autoMode: true, autoSince: today, autoDoneThrough: today - 1, updatedAt: serverTimestamp() }
+      : { autoMode: false, updatedAt: serverTimestamp() }, { merge: true });
+    closeSheet();
+    toast(on ? "자동모드를 켰어요. 내일부터 어제 것을 자동으로 처리해요." : "자동모드를 껐어요.");
+  } catch (e) { fail(e); }
+}
+
+let autoRunning = false;
+async function runAutoFill() {
+  const st = state.settings;
+  if (autoRunning || !state.user || !st || !st.autoMode || !state.cycleLoaded || !state.itemsLoaded || !state.logsLoaded) return;
+  const toDay = epochDay() - 1;
+  const doneThrough = typeof st.autoDoneThrough === "number" ? st.autoDoneThrough : toDay;
+  if (doneThrough >= toDay) return;
+  autoRunning = true;
+  const uid = state.user.uid;
+  const fromDay = Math.max(doneThrough + 1, typeof st.autoSince === "number" ? st.autoSince : toDay, toDay - AUTO_MAX_DAYS + 1);
+  try {
+    const snap = await getDocs(query(collection(db, "users", uid, "logs"), where("day", ">=", fromDay)));
+    if (!state.user || state.user.uid !== uid) return;
+    const logged = new Set(snap.docs.map((d) => d.id));
+    const list = autoTakeList({ cycle: state.cycle, extras: state.items, fromDay, toDay, logged });
+    let added = 0;
+    await runTransaction(db, async (tx) => {
+      // Read the marker inside the transaction so two open devices never both deduct.
+      const cur = await tx.get(settingsRef());
+      const c = cur.exists() ? cur.data() : {};
+      if (!c.autoMode || (typeof c.autoDoneThrough === "number" && c.autoDoneThrough >= toDay)) { added = 0; return; }
+      const change = {};
+      for (const { day, entry } of list) {
+        tx.set(doc(db, "users", uid, "logs", `${day}_${entry.key}`), logData(day, entry, "TAKEN", { auto: true }));
+        if (entry.productId) change[entry.productId] = (change[entry.productId] || 0) - entry.amount;
+      }
+      for (const [pid, n] of Object.entries(change)) {
+        tx.set(doc(db, "users", uid, "inventory", pid), { count: increment(n), updatedAt: serverTimestamp() }, { merge: true });
+      }
+      tx.set(settingsRef(), { autoDoneThrough: toDay, updatedAt: serverTimestamp() }, { merge: true });
+      added = list.length;
+    });
+    if (added) {
+      historyState.loadedAt = 0;
+      toast(`자동모드: 지난 ${toDay - fromDay + 1}일 동안 안 누른 ${added}개를 먹은 걸로 처리했어요.`);
+    }
+  } catch (e) {
+    if (state.user && state.user.uid === uid) fail(e);
+  } finally {
+    autoRunning = false;
+  }
 }
 
 function cycleProgress(cycle, today) {
@@ -1335,6 +1440,11 @@ function checkReminders() {
 // ---------- data subscriptions ----------
 function subscribe(uid) {
   const today = epochDay();
+  unsubs.push(onSnapshot(doc(db, "users", uid, "meta", "settings"), (s) => {
+    state.settings = s.exists() ? s.data() : {};
+    renderAutoToggle();
+    runAutoFill();
+  }, fail));
   unsubs.push(onSnapshot(doc(db, "config", "admins"), (s) => {
     state.adminUids = s.exists() && Array.isArray(s.data().uids) ? s.data().uids : [];
     renderAll();
@@ -1347,6 +1457,7 @@ function subscribe(uid) {
     state.items = s.docs.map((d) => ({ id: d.id, ...d.data() }));
     state.itemsLoaded = true;
     migrateStock();
+    runAutoFill();
     renderAll();
   }, fail));
   unsubs.push(onSnapshot(collection(db, "users", uid, "inventory"), (s) => {
@@ -1364,6 +1475,7 @@ function subscribe(uid) {
     const first = !state.logsLoaded;
     state.logsLoaded = true;
     renderAll();
+    runAutoFill();
     if (first && state.tab === "me") loadHistory();
   }, fail));
   unsubs.push(onSnapshot(doc(db, "config", "rotation"), (s) => {
@@ -1375,6 +1487,7 @@ function subscribe(uid) {
     state.cycle = s.exists() ? s.data() : null;
     state.cycleLoaded = true;
     migrateStock();
+    runAutoFill();
     renderAll();
   }, fail));
 }
@@ -1458,9 +1571,13 @@ function wire() {
 
   document.addEventListener("click", (e) => {
     if (handleEditorClick(e) || handleSetupClick(e) || handleRestockClick(e)) return;
-    const t = e.target.closest("[data-take],[data-skip],[data-undo],[data-edit-item],[data-adopt],[data-edit-product],[data-close-sheet],[data-delete-item],[data-delete-product],[data-photo-clear],[data-import-remove],.day-chip,#importParse,#importSave,#rotEdit,#rotStart,#cyStock,#cyNext,#cyReset,#cyConfirm,[data-restock],[data-goto],[data-pick-product],[data-inv-edit]");
+    const t = e.target.closest("[data-take-all],[data-take-section],#autoToggle,#autoSet,[data-take],[data-skip],[data-undo],[data-edit-item],[data-adopt],[data-edit-product],[data-close-sheet],[data-delete-item],[data-delete-product],[data-photo-clear],[data-import-remove],.day-chip,#importParse,#importSave,#rotEdit,#rotStart,#cyStock,#cyNext,#cyReset,#cyConfirm,[data-restock],[data-goto],[data-pick-product],[data-inv-edit]");
     if (!t) return;
-    if (t.dataset.take) setStatus(t.dataset.take, "TAKEN");
+    if ("takeAll" in t.dataset) takePending(null);
+    else if (t.dataset.takeSection) takePending(t.dataset.takeSection);
+    else if (t.id === "autoToggle") openAutoSheet();
+    else if (t.id === "autoSet") setAutoMode(t.dataset.on === "1");
+    else if (t.dataset.take) setStatus(t.dataset.take, "TAKEN");
     else if (t.dataset.skip) setStatus(t.dataset.skip, "SKIPPED");
     else if (t.dataset.undo) setStatus(t.dataset.undo, null);
     else if (t.dataset.editItem) openItemSheet(t.dataset.editItem);
@@ -1547,7 +1664,7 @@ function boot() {
     state.user = user;
     state.adminUids = null;
     state.products = []; state.items = []; state.logs = {}; state.plan = null; state.planLoaded = false; state.cycle = null; state.cycleLoaded = false;
-    state.itemsLoaded = false; state.inventory = {}; state.inventoryLoaded = false; state.logsLoaded = false;
+    state.itemsLoaded = false; state.inventory = {}; state.inventoryLoaded = false; state.logsLoaded = false; state.settings = null;
     historyState.logs = null; historyState.loadedAt = 0; historyState.loading = false;
     migrated = false;
     if (!user) { closeSheet(); showScreen("screenLogin"); return; }
@@ -1556,7 +1673,8 @@ function boot() {
     subscribe(user.uid);
   });
   setInterval(checkReminders, 20000);
-  setInterval(() => { if (state.user) { renderHeader(); renderToday(); } }, 60000);
+  setInterval(() => { if (state.user) { renderHeader(); renderToday(); runAutoFill(); } }, 60000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && state.user) { renderHeader(); renderToday(); runAutoFill(); } });
   if ("serviceWorker" in navigator && !useEmulator) navigator.serviceWorker.register("sw.js").catch(() => {});
 }
 

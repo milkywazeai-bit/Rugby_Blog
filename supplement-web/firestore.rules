@@ -1,0 +1,49 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+    function adminsDoc() {
+      return /databases/$(database)/documents/config/admins;
+    }
+    function isAdmin() {
+      return signedIn() && exists(adminsDoc()) && request.auth.uid in get(adminsDoc()).data.uids;
+    }
+    function shortString(v, max) {
+      return v is string && v.size() <= max;
+    }
+    function okPhoto(v) {
+      return v == null || (v is string && v.size() < 400000 && v.matches('^data:image/(jpeg|png|webp);base64,.*'));
+    }
+
+    // Who may edit the shared product list. The first signed-in person to claim it
+    // becomes the admin; after that only an existing admin can change the list.
+    match /config/admins {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['uids'])
+        && request.resource.data.uids == [request.auth.uid];
+      allow update: if isAdmin()
+        && request.resource.data.keys().hasOnly(['uids'])
+        && request.resource.data.uids is list
+        && request.auth.uid in request.resource.data.uids;
+      allow delete: if false;
+    }
+
+    // Shared catalog: everyone signed in can read, only admins can write.
+    match /products/{productId} {
+      allow read: if signedIn();
+      allow create, update: if isAdmin()
+        && shortString(request.resource.data.name, 120)
+        && request.resource.data.name.size() > 0
+        && okPhoto(request.resource.data.get('photo', null));
+      allow delete: if isAdmin();
+    }
+
+    // Each person's own schedule, logs and rotation: only that person.
+    match /users/{uid}/{document=**} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+  }
+}

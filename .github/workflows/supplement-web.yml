@@ -1,0 +1,73 @@
+name: Supplement web app
+
+on:
+  push:
+    paths:
+      - "supplement-web/**"
+      - ".github/workflows/supplement-web.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supplement-web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: supplement-web
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: supplement-web/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install
+        run: npm ci
+
+      - name: Unit tests (iHerb link parser)
+        run: npm test
+
+      - name: Security rules tests (local emulator)
+        run: npm run test:rules
+
+      - name: Build
+        run: npm run build
+
+      - name: Check deploy setup
+        id: setup
+        run: |
+          project=$(node -p "require('./.firebaserc').projects.default")
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ] || [ "$project" = "REPLACE_ME" ] || grep -q '"REPLACE_ME"' src/config.js; then
+            echo "::notice::Deploy skipped: Firebase project or FIREBASE_SERVICE_ACCOUNT secret not set up yet (see supplement-web/README.md)."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+            echo "project=$project" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy to Firebase
+        if: >-
+          steps.setup.outputs.deploy == 'true' &&
+          (github.event_name == 'workflow_dispatch' ||
+           github.ref_name == 'claude/supplement-schedule-app-plan-yfmmf1' ||
+           github.ref_name == github.event.repository.default_branch)
+        run: |
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/sa.json"
+          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/sa.json"
+          npx firebase deploy --only hosting,firestore:rules --project "${{ steps.setup.outputs.project }}" --non-interactive
+          echo "::notice::Deployed to https://${{ steps.setup.outputs.project }}.web.app"

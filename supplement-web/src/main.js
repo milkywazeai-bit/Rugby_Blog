@@ -1,6 +1,6 @@
 import {
-  collection, doc, onSnapshot, query, where, addDoc, setDoc, updateDoc, deleteDoc,
-  serverTimestamp, increment, writeBatch
+  collection, doc, onSnapshot, query, where, setDoc, updateDoc, deleteDoc, getDocs,
+  serverTimestamp, increment, writeBatch, deleteField
 } from "firebase/firestore";
 import {
   initFirebase, isConfigured, useEmulator, watchAuth, signInWithGoogle, signInTestUser, logOut, db
@@ -11,6 +11,9 @@ import {
   defaultPlan, validPlan, methodIndexOf, nextCycle, dailyUse, remaining, cycleStatus, itemsFromPicks, defaultPicks,
   slotOptions, baseSlots, baseItemsFromPicks, defaultBasePicks
 } from "./rotation.js";
+import {
+  dayEntries, dailyUseAll, daysLeft, productsInUse, sectionOf, SECTIONS, historyGroups, extraAmount
+} from "./schedule.js";
 
 const DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"];
 const CAPSULE_PAIRS = [
@@ -22,6 +25,9 @@ const state = {
   adminUids: null,
   products: [],
   items: [],
+  itemsLoaded: false,
+  inventory: {},
+  inventoryLoaded: false,
   logs: {},
   plan: null,
   planLoaded: false,
@@ -91,41 +97,48 @@ function renderLogin() {
 }
 
 // ---------- today ----------
-function todayItems() {
+// One list for the day: the running cycle, the base set (4번) and extra supplements.
+// "완료" takes the dose out of 재고; undo puts it back.
+const KIND_TAG = { cycle: "사이클", base: "4번", extra: "추가" };
+
+function invCount(pid) {
+  const v = state.inventory[pid];
+  return typeof v === "number" ? v : null;
+}
+
+function currentCycleTitle() {
+  const cy = state.cycle;
+  if (!cy) return "";
+  const planned = state.plan ? state.plan.methods.find((x) => x.id === cy.methodId) : null;
+  return planned ? planned.title : cy.title;
+}
+
+function todayEntries() {
   const day = epochDay();
-  const dow = isoDowOfEpochDay(day);
-  return state.items
-    .filter((it) => Array.isArray(it.days) && it.days.includes(dow))
-    .map((it) => ({ item: it, status: state.logs[day + "_" + it.id] || "PENDING" }))
-    .sort((a, b) => a.item.timeMinutes - b.item.timeMinutes);
+  return dayEntries({ cycle: state.cycle, extras: state.items, day })
+    .map((e) => ({ ...e, status: state.logs[day + "_" + e.key] || "PENDING" }));
 }
 
-function adherence() {
-  const today = epochDay();
-  let taken = 0, total = 0;
-  for (let day = today - 6; day <= today; day++) {
-    const dow = isoDowOfEpochDay(day);
-    for (const it of state.items) {
-      if (!Array.isArray(it.days) || !it.days.includes(dow)) continue;
-      if (typeof it.createdDay === "number" && day < it.createdDay) continue;
-      total++;
-      if (state.logs[day + "_" + it.id] === "TAKEN") taken++;
-    }
-  }
-  return total ? taken / total : 0;
+function entryName(e) {
+  const p = e.productId ? productById(e.productId) : null;
+  if (p) return p.name;
+  const it = e.itemId ? state.items.find((x) => x.id === e.itemId) : null;
+  return (it && it.name) || e.label || "이름 없음";
 }
 
-function sectionKey(mins) {
-  if (mins < 11 * 60) return "morning";
-  if (mins < 17 * 60) return "afternoon";
-  if (mins < 21 * 60) return "evening";
-  return "night";
+function unitOf(pid) {
+  const p = pid ? productById(pid) : null;
+  return (p && p.form) || "개";
 }
+
+function fmtNum(n) { return Number.isInteger(n) ? String(n) : n.toFixed(1); }
 
 function renderHeader() {
   const d = new Date();
   $("#todayLabel").textContent = `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일 · ${"일월화수목금토"[d.getDay()]}요일`;
-  const rate = adherence();
+  const list = todayEntries();
+  const done = list.filter((e) => e.status === "TAKEN").length;
+  const rate = list.length ? done / list.length : 0;
   const c = 2 * Math.PI * 24;
   $("#ringProgress").setAttribute("stroke-dasharray", c.toFixed(1));
   $("#ringProgress").setAttribute("stroke-dashoffset", (c * (1 - rate)).toFixed(1));
@@ -133,37 +146,42 @@ function renderHeader() {
 }
 
 function renderToday() {
-  const list = todayItems();
+  const list = todayEntries();
   const box = $("#todayList");
-  if (!state.items.length) {
-    box.innerHTML = `<div class="empty"><strong>아직 등록한 영양제가 없어요.</strong><br>
-      <span>"제품" 탭에서 골라 담거나, 아래 + 버튼으로 직접 추가하세요.</span></div>`;
-    return;
-  }
   if (!list.length) {
-    box.innerHTML = `<div class="empty">오늘은 먹을 영양제가 없는 요일이에요.</div>`;
+    box.innerHTML = `<div class="empty"><strong>오늘 먹을 영양제가 없어요.</strong>
+      <span>유산균 사이클을 시작하거나 추가 영양제를 등록하면 여기에 모아서 보여드려요.</span>
+      <div class="empty-actions"><button type="button" class="btn-small primary" data-goto="rotation">유산균 사이클</button><button type="button" class="btn-small" data-goto="extras">추가 영양제</button></div></div>`;
     return;
   }
-  const labels = { morning: "아침", afternoon: "낮", evening: "저녁", night: "밤" };
-  const groups = { morning: [], afternoon: [], evening: [], night: [] };
-  list.forEach((x) => groups[sectionKey(x.item.timeMinutes)].push(x));
+  const code = state.cycle ? cycleCode(state.cycle) : "";
+  const use = dailyUseAll({ cycle: state.cycle, extras: state.items });
   let html = "";
-  for (const key of Object.keys(groups)) {
-    const g = groups[key];
+  for (const sec of SECTIONS) {
+    const g = list.filter((e) => sectionOf(e.minutes) === sec.key);
     if (!g.length) continue;
-    html += `<section class="section"><div class="section-head"><span class="label">${labels[key]}</span><span class="count">${g.length}</span></div>`;
-    for (const { item, status } of g) {
-      const low = item.stockCount <= item.lowStockThreshold ? `<span class="chip low">재고 ${esc(item.stockCount)}개</span>` : "";
+    const done = g.filter((e) => e.status !== "PENDING").length;
+    html += `<section class="section"><div class="section-head"><span class="label">${sec.label}</span><span class="count">${done}/${g.length}</span></div>`;
+    for (const e of g) {
+      const p = e.productId ? productById(e.productId) : null;
+      const it = e.itemId ? state.items.find((x) => x.id === e.itemId) : null;
+      const name = entryName(e);
+      const photo = p && isSafePhoto(p.photo) ? p.photo : (it ? photoFor(it) : null);
+      const left = e.productId ? invCount(e.productId) : null;
+      const dl = left === null ? null : daysLeft(Math.max(0, left), use[e.productId]);
+      const tag = e.kind === "cycle" ? `사이클 ${code}` : KIND_TAG[e.kind];
+      const when = e.kind === "extra" ? fmtTime(e.minutes) : (e.meal === "dinner" ? "저녁 먹고" : "점심 먹고");
+      const stock = left === null ? "" : `<span class="chip ${dl !== null && dl < 10 ? "low" : "stock"}">재고 ${Math.max(0, left)}</span>`;
       let actions;
-      if (status === "TAKEN") actions = `<button class="chip taken" data-undo="${esc(item.id)}" title="되돌리기">완료 ✓</button>`;
-      else if (status === "SKIPPED") actions = `<button class="chip skipped" data-undo="${esc(item.id)}" title="되돌리기">건너뜀</button>`;
-      else actions = `<div class="item-actions"><button class="btn-take" data-take="${esc(item.id)}">완료</button><button class="btn-skip" data-skip="${esc(item.id)}">건너뛰기</button></div>`;
-      html += `<div class="item">
-        ${thumbHtml(item.name, photoFor(item))}
-        <button class="item-body" data-edit-item="${esc(item.id)}">
-          <span class="item-name">${esc(item.name)}</span>
-          <span class="item-meta"><span>${fmtTime(item.timeMinutes)}</span><span>${esc(item.dosage)}</span>${low}</span>
-        </button>
+      if (e.status === "TAKEN") actions = `<button class="chip taken" data-undo="${esc(e.key)}" title="되돌리기">완료 ✓</button>`;
+      else if (e.status === "SKIPPED") actions = `<button class="chip skipped" data-undo="${esc(e.key)}" title="되돌리기">건너뜀</button>`;
+      else actions = `<div class="item-actions"><button class="btn-take" data-take="${esc(e.key)}">완료</button><button class="btn-skip" data-skip="${esc(e.key)}">건너뛰기</button></div>`;
+      html += `<div class="item${e.status !== "PENDING" ? " done" : ""}">
+        ${thumbHtml(name, photo)}
+        <div class="item-body">
+          <span class="item-name">${esc(name)}</span>
+          <span class="item-meta"><span class="chip kind ${e.kind}">${esc(tag)}</span><span>${esc(when)}</span><span>${fmtNum(e.amount)}${esc(unitOf(e.productId))}</span>${stock}</span>
+        </div>
         ${actions}
       </div>`;
     }
@@ -172,38 +190,53 @@ function renderToday() {
   box.innerHTML = html;
 }
 
-async function setStatus(itemId, status) {
+async function setStatus(key, status) {
   const uid = state.user.uid;
   const day = epochDay();
-  const key = day + "_" + itemId;
-  const prev = state.logs[key];
-  const item = state.items.find((x) => x.id === itemId);
+  const e = todayEntries().find((x) => x.key === key);
+  if (!e) return;
+  const prev = state.logs[day + "_" + key];
   try {
     const batch = writeBatch(db);
-    const logRef = doc(db, "users", uid, "logs", key);
-    const itemRef = doc(db, "users", uid, "items", itemId);
+    const logRef = doc(db, "users", uid, "logs", `${day}_${key}`);
+    const invRef = e.productId ? doc(db, "users", uid, "inventory", e.productId) : null;
+    const change = (n) => { if (invRef) batch.set(invRef, { count: increment(n), updatedAt: serverTimestamp() }, { merge: true }); };
     if (status === null) {
       batch.delete(logRef);
-      if (prev === "TAKEN") batch.update(itemRef, { stockCount: increment(1) });
+      if (prev === "TAKEN") change(e.amount);
     } else {
-      batch.set(logRef, { day, itemId, status, at: serverTimestamp() });
-      if (status === "TAKEN" && prev !== "TAKEN" && item && item.stockCount > 0) batch.update(itemRef, { stockCount: increment(-1) });
-      if (status !== "TAKEN" && prev === "TAKEN") batch.update(itemRef, { stockCount: increment(1) });
+      batch.set(logRef, {
+        day, key, kind: e.kind, productId: e.productId || null, name: entryName(e), amount: e.amount, status, at: serverTimestamp(),
+        ...(e.kind === "cycle" && state.cycle ? { cycleCode: cycleCode(state.cycle), cycleTitle: currentCycleTitle() } : {})
+      });
+      if (status === "TAKEN" && prev !== "TAKEN") change(-e.amount);
+      if (status !== "TAKEN" && prev === "TAKEN") change(e.amount);
     }
     await batch.commit();
-  } catch (e) { fail(e); }
+    historyState.loadedAt = 0;
+  } catch (err) { fail(err); }
+}
+
+function cycleProgress(cycle, today) {
+  const use = dailyUseAll({ cycle, extras: state.items });
+  const items = cycle.items || [];
+  const main = items.find((it) => it.meal === "lunch" && it.productId) || items.find((it) => it.productId) || null;
+  const day = today - cycle.startDay + 1;
+  if (!main) return { day, main: null, daysLeft: null };
+  const left = invCount(main.productId);
+  const dl = left === null ? null : daysLeft(Math.max(0, left), use[main.productId]);
+  return { day, main, daysLeft: dl, endDay: dl === null ? null : today + dl };
 }
 
 // ---------- products ----------
 function renderProducts() {
   const admin = isAdmin();
-  $("#productsAdminNote").hidden = !admin;
   const q = state.productQuery.trim().toLowerCase();
   const list = state.products.filter((p) => !q || (p.name + " " + (p.brand || "")).toLowerCase().includes(q));
   const box = $("#productGrid");
   if (!state.products.length) {
     box.innerHTML = admin
-      ? `<div class="empty"><strong>공용 제품 목록이 비어 있어요.</strong><br><span>아래 + 버튼을 눌러 아이허브 링크를 붙여넣으면 한 번에 추가돼요.</span></div>`
+      ? `<div class="empty"><strong>공용 제품 목록이 비어 있어요.</strong><br><span>위의 "아이허브 링크로 추가"를 눌러 링크를 붙여넣으면 한 번에 추가돼요.</span></div>`
       : `<div class="empty"><strong>아직 등록된 제품이 없어요.</strong><br><span>관리자가 제품을 추가하면 여기에 보여요. 그 전에는 + 버튼으로 내 스케줄에 직접 추가할 수 있어요.</span></div>`;
     return;
   }
@@ -220,7 +253,7 @@ function renderProducts() {
         <div class="pname">${esc(p.name)}</div>
         <div class="pmeta">${esc(describeAmount(p))}</div>
         <div class="pactions">
-          ${mine ? `<span class="chip taken">내 스케줄에 있음</span>` : `<button class="btn-small primary" data-adopt="${esc(p.id)}">내 스케줄에 추가</button>`}
+          ${mine ? `<span class="chip taken">추가 영양제에 있음</span>` : `<button class="btn-small primary" data-adopt="${esc(p.id)}">추가 영양제로 담기</button>`}
           <a class="iherb-link" href="${esc(safeIherbUrl(p.url, p.name))}" target="_blank" rel="noopener">아이허브</a>
           ${admin ? `<button class="btn-small" data-edit-product="${esc(p.id)}">수정</button>` : ""}
         </div>
@@ -284,19 +317,21 @@ function allItems(cycle) {
 
 const MEAL_NAMES = { lunch: "점심", dinner: "저녁" };
 
-function itemRows(items, use, stock, today) {
+function itemRows(items, use) {
   return items.map((it) => {
-    const left = remaining((stock || {})[it.productId], use[it.productId], today);
-    const low = left !== null && left <= use[it.productId] * 3;
+    const raw = invCount(it.productId);
+    const left = raw === null ? null : Math.max(0, raw);
+    const dl = left === null ? null : daysLeft(left, use[it.productId]);
+    const low = dl !== null && dl < LOW_DAYS;
     return `<div class="cy-item"><div class="cy-label">${esc(it.label)}<span class="slot-amount">${esc(it.amount)}</span></div>
-      ${productRow(it.productId, left === null ? "" : `<span class="cy-left${low ? " low" : ""}">남은 약 ${left}개</span>`)}</div>`;
+      ${productRow(it.productId, left === null ? "" : `<span class="cy-left${low ? " low" : ""}">재고 ${left}개</span>`)}</div>`;
   }).join("");
 }
 
 function mealSections(items, use, stock, today) {
   return ["lunch", "dinner"].map((meal) => {
     const list = items.filter((it) => it.meal === meal);
-    return list.length ? `<div class="meal"><div class="meal-head">${MEAL_NAMES[meal]} 먹고</div>${itemRows(list, use, stock, today)}</div>` : "";
+    return list.length ? `<div class="meal"><div class="meal-head">${MEAL_NAMES[meal]} 먹고</div>${itemRows(list, use)}</div>` : "";
   }).join("") || `<p class="mc-note">없음</p>`;
 }
 
@@ -318,12 +353,12 @@ function renderRotation() {
     return;
   }
   const today = epochDay();
-  const st = cycleStatus(cycle, today);
-  const use = dailyUse(allItems(cycle));
+  const st = cycleProgress(cycle, today);
+  const use = dailyUseAll({ cycle, extras: state.items });
   const mainName = st.main ? (productById(st.main.productId)?.name || st.main.label) : "";
   const ending = st.daysLeft === null ? ""
     : st.daysLeft <= 0
-      ? `<div class="cy-alert">${esc(mainName)}이(가) 다 떨어졌을 거예요. 다음 사이클을 시작하세요.</div>`
+      ? `<div class="cy-alert">${esc(mainName)}이(가) 다 떨어졌어요. 다음 사이클을 시작하세요.</div>`
       : `<p class="mc-note">${esc(mainName)} 기준 약 ${st.daysLeft}일 남았어요<br>${fmtDay(st.endDay)}쯤 다음 사이클로 넘어가요</p>`;
   const base = cycle.base;
   const planned = plan ? plan.methods.find((x) => x.id === cycle.methodId) : null;
@@ -333,14 +368,14 @@ function renderRotation() {
     <div class="mc-title">${esc(cur.title)}${cur.subtitle ? ` <span class="mc-sub">${esc(cur.subtitle)}</span>` : ""}</div>
     ${ending}
     ${mealSections(cycle.items || [], use, cycle.stock, today)}
-    <div class="cy-actions"><button class="btn-small" data-restock type="button">새 통 추가</button><button class="btn-small" id="cyStock" type="button">보유 개수 수정</button>
+    <div class="cy-actions"><button class="btn-small" data-restock="" type="button">새 통 추가</button><button class="btn-small" id="cyStock" type="button">보유 개수 수정</button>
       ${plan ? `<button class="btn-small primary" id="cyNext" type="button">다음 사이클 시작</button>` : ""}</div>
   </div>
   ${base && (base.items || []).length ? `<div class="month-card base">
     <div class="mc-when">계속 먹는 기본 구성 <span class="cy-days">${fmtDay(base.startDay)}부터 · ${today - base.startDay + 1}일째</span></div>
     <div class="mc-title">${esc(base.title || "4번 사이클")}${base.subtitle ? ` <span class="mc-sub">${esc(base.subtitle)}</span>` : ""}</div>
     ${mealSections(base.items, use, cycle.stock, today)}
-    <div class="cy-actions"><button class="btn-small" data-restock type="button">새 통 추가</button></div>
+    <div class="cy-actions"><button class="btn-small" data-restock="" type="button">새 통 추가</button></div>
   </div>` : ""}`;
   if (plan) {
     const n = nextCycle(plan, cycle);
@@ -378,8 +413,8 @@ function preparePicks() {
 
 function stockDefault(pid) {
   if (setup.stock[pid] !== undefined) return setup.stock[pid];
-  const cy = state.cycle;
-  if (cy && cy.stock && cy.stock[pid]) return remaining(cy.stock[pid], dailyUse(allItems(cy))[pid], epochDay());
+  const have = invCount(pid);
+  if (have !== null) return Math.max(0, have);
   const p = productById(pid);
   return p && p.count ? p.count : 30;
 }
@@ -499,9 +534,9 @@ async function confirmCycle() {
   const base = setup.withBase
     ? { title: plan.base?.title || "4번 사이클", subtitle: plan.base?.subtitle || "", startDay: today, items: baseItemsFromPicks(baseSlots(plan), setup.picks) }
     : prev.base;
-  const stock = { ...((prev && prev.stock) || {}) };
+  const stock = {};
   for (const pid of new Set([...items, ...(setup.withBase ? base.items : [])].map((it) => it.productId))) {
-    stock[pid] = { count: Math.max(0, parseInt(stockDefault(pid), 10) || 0), day: today };
+    stock[pid] = Math.max(0, parseInt(stockDefault(pid), 10) || 0);
   }
   let round = 1;
   if (prev) {
@@ -512,39 +547,19 @@ async function confirmCycle() {
     ? [...(prev.history || []).slice(-23), { methodId: prev.methodId, title: prev.title, round: prev.round || 1, startDay: prev.startDay, endDay: today }]
     : [];
   try {
-    await setDoc(doc(db, "users", state.user.uid, "meta", "cycle"), {
+    const uid = state.user.uid;
+    const batch = writeBatch(db);
+    batch.set(doc(db, "users", uid, "meta", "cycle"), {
       methodId: m.id, methodIndex: setup.methodIndex, title: m.title, subtitle: m.subtitle || "",
-      round, startDay: today, items, base: base || null, stock, history, updatedAt: serverTimestamp()
+      round, startDay: today, items, base: base || null, history, updatedAt: serverTimestamp()
     });
+    for (const [pid, count] of Object.entries(stock)) {
+      batch.set(doc(db, "users", uid, "inventory", pid), { count, updatedAt: serverTimestamp() }, { merge: true });
+    }
+    await batch.commit();
     setup = null;
     closeSheet();
     toast(prev ? "다음 사이클을 시작했어요. 오늘이 1일째예요." : "시작했어요. 오늘이 1일째예요.");
-  } catch (e) { fail(e); }
-}
-
-function openStockSheet() {
-  const cy = state.cycle;
-  const today = epochDay();
-  const use = dailyUse(allItems(cy));
-  const pids = [...new Set(allItems(cy).map((it) => it.productId))];
-  openSheet("보유 개수 수정", `<form id="stockForm">
-    <p class="hint">지금 실제로 남아 있는 개수를 적어주세요. 오늘부터 다시 계산해요.</p>
-    ${pids.map((pid) => `<div class="cy-stock">${productRow(pid)}
-      <label class="cy-stock-in"><input type="number" min="0" inputmode="numeric" name="${esc(pid)}" value="${esc(remaining(cy.stock?.[pid], use[pid], today) ?? "")}" aria-label="보유 개수"><span>개<br>하루 ${use[pid]}개</span></label></div>`).join("")}
-    <div class="sheet-actions"><button type="button" class="btn-secondary" data-close-sheet>취소</button><button type="submit" class="btn-primary">저장</button></div>
-  </form>`);
-}
-
-async function saveStock(form) {
-  const today = epochDay();
-  const stock = { ...(state.cycle.stock || {}) };
-  form.querySelectorAll("input[type=number]").forEach((inp) => {
-    if (inp.value !== "") stock[inp.name] = { count: Math.max(0, parseInt(inp.value, 10) || 0), day: today };
-  });
-  try {
-    await updateDoc(doc(db, "users", state.user.uid, "meta", "cycle"), { stock });
-    closeSheet();
-    toast("보유 개수를 고쳤어요.");
   } catch (e) { fail(e); }
 }
 
@@ -739,21 +754,70 @@ async function savePlan() {
   } catch (e) { fail(e); }
 }
 
+// ---------- 재고 (inventory) ----------
+// users/{uid}/inventory/{productId}.count is the real count: set when a cycle or extra
+// is set up, raised by "새 통 추가", lowered by "완료" in 오늘.
+const WHERE_TAG = { cycle: "유산균 사이클", base: "4번", extra: "추가 영양제" };
+const LOW_DAYS = 10;
+
+function inventoryRows() {
+  const where = productsInUse({ cycle: state.cycle, extras: state.items });
+  const use = dailyUseAll({ cycle: state.cycle, extras: state.items });
+  const rows = [];
+  for (const [pid, tags] of where) {
+    const count = invCount(pid);
+    rows.push({ pid, tags: [...tags], count, perDay: use[pid] || 0, days: count === null ? null : daysLeft(Math.max(0, count), use[pid]) });
+  }
+  for (const [pid, count] of Object.entries(state.inventory)) {
+    if (!where.has(pid) && count > 0) rows.push({ pid, tags: [], count, perDay: 0, days: null, ahead: true });
+  }
+  return rows.sort((a, b) => (a.ahead ? 1 : 0) - (b.ahead ? 1 : 0) || (a.days ?? 1e9) - (b.days ?? 1e9));
+}
+
+function renderInventory() {
+  const rows = inventoryRows();
+  const box = $("#invList");
+  if (!rows.length) {
+    box.innerHTML = `<div class="empty"><strong>재고가 비어 있어요.</strong><span>유산균 사이클을 시작하거나 추가 영양제를 등록하면 그 제품들이 여기 나와요.</span></div>`;
+    return;
+  }
+  const inUse = rows.filter((r) => !r.ahead);
+  const ahead = rows.filter((r) => r.ahead);
+  const row = (r) => {
+    const p = productById(r.pid);
+    const low = r.days !== null && r.days < LOW_DAYS;
+    const sub = r.ahead ? "미리 사둔 것 · 사이클이나 추가 영양제에 넣으면 자동으로 쓰여요"
+      : r.count === null ? "개수를 아직 안 넣었어요"
+      : `하루 ${fmtNum(r.perDay)}개 · ${r.days === null ? "" : r.days <= 0 ? "다 떨어졌어요" : `약 ${r.days}일 치`}`;
+    return `<div class="inv-row${low ? " low" : ""}">
+      ${productRow(r.pid, `<span class="inv-count">${r.count === null ? "—" : Math.max(0, r.count)}<small>개</small></span>`)}
+      <div class="inv-meta">${r.tags.map((t) => `<span class="chip kind ${t}">${WHERE_TAG[t]}</span>`).join("")}<span class="inv-sub${low ? " low" : ""}">${esc(sub)}</span></div>
+      <div class="inv-actions">
+        ${p ? `<a class="iherb-link" href="${esc(safeIherbUrl(p.url, productLabel(p)))}" target="_blank" rel="noopener">아이허브</a>` : ""}
+        <button type="button" class="btn-small" data-inv-edit="${esc(r.pid)}">개수 수정</button>
+        <button type="button" class="btn-small primary" data-restock="${esc(r.pid)}">+ 새 통</button>
+      </div>
+    </div>`;
+  };
+  box.innerHTML = `${inUse.length ? `<h3 class="sub-head">먹고 있는 제품</h3>${inUse.map(row).join("")}` : ""}
+    ${ahead.length ? `<h3 class="sub-head">미리 사둔 제품</h3>${ahead.map(row).join("")}` : ""}`;
+}
+
 // ----- new bottles bought -----
-// Bottles are added on top of what's left today. Products not taken right now
-// (e.g. bought ahead for the next cycle) keep their count until that cycle starts.
+// Bottles are added on top of what's on hand. Products bought ahead (not taken yet)
+// keep their count and are used once they're put into a cycle or extras.
 let restock = null;
 
-function openRestockSheet() {
-  const pids = [...new Set(allItems(state.cycle).map((it) => it.productId))];
-  restock = { rows: pids.map((pid) => ({ pid, n: 0, per: productById(pid)?.count || 30 })) };
+function openRestockSheet(focusPid) {
+  const pids = inventoryRows().map((r) => r.pid);
+  if (focusPid && !pids.includes(focusPid)) pids.unshift(focusPid);
+  restock = { rows: pids.map((pid) => ({ pid, n: pid === focusPid ? 1 : 0, per: productById(pid)?.count || 30 })) };
   openSheet("새 통 추가", `<form id="restockForm"></form>`);
   renderRestock();
 }
 
 function restockLeft(pid) {
-  const cy = state.cycle;
-  return remaining((cy.stock || {})[pid], dailyUse(allItems(cy))[pid] || 0, epochDay()) ?? 0;
+  return Math.max(0, invCount(pid) ?? 0);
 }
 
 function renderRestock() {
@@ -763,7 +827,7 @@ function renderRestock() {
   const scroll = sheet.scrollTop;
   const listed = new Set(restock.rows.map((r) => r.pid));
   const others = state.products.filter((p) => !listed.has(p.id)).sort((a, b) => productLabel(a).localeCompare(productLabel(b), "ko"));
-  form.innerHTML = `<p class="hint">산 만큼 통 수를 올려주세요. 지금 남은 개수에 더해져요. 다음 사이클용으로 미리 산 제품은 아래에서 추가하면, 그 사이클을 시작할 때 개수가 자동으로 채워져요.</p>
+  form.innerHTML = `<p class="hint">산 만큼 통 수를 올려주세요. 지금 개수에 더해져요. 아직 안 먹는 제품을 미리 샀다면 아래에서 추가하세요.</p>
     ${restock.rows.map((r, i) => {
       const left = restockLeft(r.pid);
       return `<div class="rs-row" data-rs="${i}">${productRow(r.pid)}
@@ -804,64 +868,240 @@ function handleRestockChange(t) {
 }
 
 async function saveRestock() {
-  const today = epochDay();
-  const stock = { ...(state.cycle.stock || {}) };
+  const uid = state.user.uid;
+  const batch = writeBatch(db);
   let bottles = 0;
   for (const r of restock.rows) {
     if (!r.n) continue;
-    stock[r.pid] = { count: restockLeft(r.pid) + r.n * Math.max(1, r.per), day: today };
+    batch.set(doc(db, "users", uid, "inventory", r.pid), { count: restockLeft(r.pid) + r.n * Math.max(1, r.per), updatedAt: serverTimestamp() }, { merge: true });
     bottles += r.n;
   }
   if (!bottles) { toast("산 통 수를 + 버튼으로 올려주세요."); return; }
   try {
-    await updateDoc(doc(db, "users", state.user.uid, "meta", "cycle"), { stock });
+    await batch.commit();
     restock = null;
     closeSheet();
-    toast(`${bottles}통을 추가했어요.`);
+    toast(`${bottles}통을 재고에 추가했어요.`);
+  } catch (e) { fail(e); }
+}
+
+// ----- exact counts -----
+function openInventoryEdit(pids, title = "개수 수정") {
+  const use = dailyUseAll({ cycle: state.cycle, extras: state.items });
+  openSheet(title, `<form id="stockForm">
+    <p class="hint">지금 실제로 남아 있는 개수를 적어주세요.</p>
+    ${pids.map((pid) => `<div class="cy-stock">${productRow(pid)}
+      <label class="cy-stock-in"><input type="number" min="0" inputmode="numeric" name="${esc(pid)}" value="${esc(invCount(pid) === null ? "" : Math.max(0, invCount(pid)))}" aria-label="보유 개수"><span>개${use[pid] ? `<br>하루 ${fmtNum(use[pid])}개` : ""}</span></label></div>`).join("")}
+    <div class="sheet-actions"><button type="button" class="btn-secondary" data-close-sheet>취소</button><button type="submit" class="btn-primary">저장</button></div>
+  </form>`);
+}
+
+function openStockSheet() {
+  openInventoryEdit([...new Set(allItems(state.cycle).map((it) => it.productId))], "보유 개수 수정");
+}
+
+async function saveStock(form) {
+  const uid = state.user.uid;
+  const batch = writeBatch(db);
+  form.querySelectorAll("input[type=number]").forEach((inp) => {
+    if (inp.value !== "") batch.set(doc(db, "users", uid, "inventory", inp.name), { count: Math.max(0, parseInt(inp.value, 10) || 0), updatedAt: serverTimestamp() }, { merge: true });
+  });
+  try {
+    await batch.commit();
+    closeSheet();
+    toast("개수를 고쳤어요.");
   } catch (e) { fail(e); }
 }
 
 // ----- running low (내 정보) -----
-const LOW_STOCK = 10;
-
-function lowStockList() {
-  const out = new Map();
-  const cy = state.cycle;
-  const today = epochDay();
-  if (cy) {
-    const use = dailyUse(allItems(cy));
-    for (const pid of new Set(allItems(cy).map((it) => it.productId))) {
-      const left = remaining((cy.stock || {})[pid], use[pid], today);
-      if (left !== null && left < LOW_STOCK) out.set(pid, { pid, left, perDay: use[pid], from: "유산균" });
-    }
-  }
-  for (const it of state.items) {
-    if (typeof it.stockCount !== "number" || it.stockCount >= LOW_STOCK) continue;
-    const key = it.productId || "item:" + it.id;
-    const prev = out.get(key);
-    if (!prev || it.stockCount < prev.left) {
-      out.set(key, { pid: it.productId || null, name: it.name, photo: it.photo, url: it.url, left: it.stockCount, perDay: 1, from: "오늘" });
-    }
-  }
-  return [...out.values()].sort((a, b) => a.left - b.left);
-}
-
 function renderLowStock() {
-  const list = lowStockList();
+  const list = inventoryRows().filter((r) => !r.ahead && r.days !== null && r.days < LOW_DAYS);
   $("#lowCount").textContent = list.length ? `${list.length}개` : "";
-  $("#lowStock").innerHTML = list.length ? list.map((x) => {
-    const p = x.pid ? productById(x.pid) : null;
-    const name = p ? p.name : x.name;
-    const photo = p && isSafePhoto(p.photo) ? p.photo : (isSafePhoto(x.photo) ? x.photo : null);
-    const url = p ? safeIherbUrl(p.url, productLabel(p)) : safeIherbUrl(x.url, x.name);
-    const days = x.perDay ? Math.floor(x.left / x.perDay) : null;
+  $("#lowStock").innerHTML = list.length ? list.map((r) => {
+    const p = productById(r.pid);
+    const url = p ? safeIherbUrl(p.url, productLabel(p)) : iherbSearchUrl("");
     return `<div class="low-row">
-      <div class="cy-prod">${thumbHtml(name, photo, "opt-photo")}
-        <span class="opt-text">${p && p.brand ? `<span class="opt-brand">${esc(p.brand)}</span>` : ""}<span class="opt-name">${esc(name)}</span></span>
-        <span class="low-left${x.left <= 0 ? " out" : ""}">${x.left <= 0 ? "다 떨어짐" : `${x.left}개 남음`}${x.left > 0 && days !== null ? `<br><small>약 ${days}일 치</small>` : ""}</span></div>
+      ${productRow(r.pid, `<span class="low-left${r.days <= 0 ? " out" : ""}">${r.days <= 0 ? "다 떨어짐" : `약 ${r.days}일 치`}<br><small>${Math.max(0, r.count)}개 남음</small></span>`)}
       <a class="iherb-link low-link" href="${esc(url)}" target="_blank" rel="noopener">아이허브에서 주문하기 →</a>
     </div>`;
-  }).join("") : `<p class="mc-note">10개 미만으로 남은 제품이 없어요.</p>`;
+  }).join("") : `<p class="mc-note">10일 안에 떨어지는 제품이 없어요.</p>`;
+}
+
+// ----- history (내 정보) -----
+const historyState = { by: "day", logs: null, loading: false, loadedAt: 0 };
+const HISTORY_LIMIT = { day: 14, week: 8, month: 6 };
+
+async function loadHistory(force = false) {
+  if (!state.user || historyState.loading) return;
+  // Wait for the first logs snapshot: a query sent right at sign-in can go out before the auth token does.
+  if (!state.logsLoaded) { renderHistory(); return; }
+  if (!force && historyState.logs && Date.now() - historyState.loadedAt < 60000) { renderHistory(); return; }
+  historyState.loading = true;
+  renderHistory();
+  const uid = state.user.uid;
+  try {
+    const snap = await getDocs(query(collection(db, "users", uid, "logs"), where("day", ">=", epochDay() - 190)));
+    // Signed out (or switched account) while this was loading: drop the result.
+    if (!state.user || state.user.uid !== uid) { historyState.loading = false; return; }
+    historyState.logs = snap.docs.map((d) => {
+      const v = d.data();
+      if (v.kind) return v;
+      const it = state.items.find((x) => x.id === v.itemId);
+      return { ...v, kind: "extra", productId: it ? it.productId : null, name: it ? it.name : "" };
+    });
+    historyState.loadedAt = Date.now();
+  } catch (e) {
+    if (state.user && state.user.uid === uid) fail(e);
+  }
+  historyState.loading = false;
+  renderHistory();
+}
+
+function historyLabel(by, key) {
+  if (by === "month") return `${Math.floor(key / 100)}년 ${key % 100}월`;
+  const d = new Date(key * 86400000);
+  const md = `${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일`;
+  if (by === "week") {
+    const end = new Date((key + 6) * 86400000);
+    return `${md} ~ ${end.getUTCMonth() + 1}월 ${end.getUTCDate()}일`;
+  }
+  const today = epochDay();
+  const rel = key === today ? " · 오늘" : key === today - 1 ? " · 어제" : "";
+  return `${md} (${"일월화수목금토"[d.getUTCDay()]})${rel}`;
+}
+
+function renderHistory() {
+  document.querySelectorAll("[data-history]").forEach((b) => b.classList.toggle("on", b.dataset.history === historyState.by));
+  const box = $("#historyList");
+  if (!historyState.logs) {
+    box.innerHTML = `<p class="mc-note">${historyState.loading || !state.logsLoaded ? "불러오는 중이에요…" : ""}</p>`;
+    return;
+  }
+  const by = historyState.by;
+  const groups = historyGroups(historyState.logs, by).slice(0, HISTORY_LIMIT[by]);
+  if (!groups.length) {
+    box.innerHTML = `<p class="mc-note">아직 기록이 없어요. 오늘 탭에서 완료를 누르면 여기에 쌓여요.</p>`;
+    return;
+  }
+  const kindOrder = ["cycle", "base", "extra"];
+  box.innerHTML = groups.map((g) => {
+    const byKind = kindOrder.map((k) => [k, g.products.filter((p) => p.kind === k)]).filter(([, l]) => l.length);
+    return `<div class="hist">
+      <div class="hist-head"><strong>${esc(historyLabel(by, g.key))}</strong>
+        <span class="hist-stats">${by === "day" ? "" : `${g.activeDays}일 먹음 · `}완료 ${g.taken}${g.skipped ? ` · 건너뜀 ${g.skipped}` : ""}</span></div>
+      ${g.cycles.length ? `<div class="hist-cycles">${g.cycles.map((c) => `<span class="chip code">${esc(c.code)}</span><span class="hist-ctitle">${esc(c.title)}</span>`).join("")}</div>` : ""}
+      ${byKind.map(([k, list]) => `<div class="hist-kind"><span class="chip kind ${k}">${KIND_TAG[k] === "사이클" ? "유산균 사이클" : KIND_TAG[k] === "추가" ? "추가 영양제" : "4번"}</span>
+        <span class="hist-prods">${list.map((p) => {
+          const prod = p.productId ? productById(p.productId) : null;
+          const name = prod ? prod.name : p.name || "이름 없음";
+          return `${esc(name)}${by === "day" ? "" : ` <small>${p.times}회</small>`}`;
+        }).join(", ")}</span></div>`).join("")}
+    </div>`;
+  }).join("");
+}
+
+// ---------- extra supplements (추가 영양제) ----------
+function daysText(days) {
+  const d = [...(days || [])].sort();
+  if (d.length === 7) return "매일";
+  if (d.join() === "1,2,3,4,5") return "평일";
+  return d.map((x) => DAY_LABELS[x - 1]).join("·");
+}
+
+function renderExtras() {
+  const box = $("#extrasList");
+  const items = [...state.items].sort((a, b) => (a.timeMinutes || 0) - (b.timeMinutes || 0));
+  if (!items.length) {
+    box.innerHTML = `<div class="empty"><strong>아직 추가 영양제가 없어요.</strong><span>유산균 사이클 말고 따로 챙겨 먹는 영양제를 제품 목록에서 골라 추가하세요.</span></div>`;
+    return;
+  }
+  box.innerHTML = items.map((it) => {
+    const p = it.productId ? productById(it.productId) : null;
+    const name = p ? p.name : it.name || "이름 없음";
+    const left = it.productId ? invCount(it.productId) : null;
+    return `<div class="item">
+      ${thumbHtml(name, photoFor(it))}
+      <button class="item-body" data-edit-item="${esc(it.id)}">
+        ${p && p.brand ? `<span class="opt-brand">${esc(p.brand)}</span>` : ""}
+        <span class="item-name">${esc(name)}</span>
+        <span class="item-meta"><span>${fmtTime(it.timeMinutes || 0)}</span><span>${esc(daysText(it.days))}</span><span>${fmtNum(extraAmount(it))}${esc(unitOf(it.productId))}씩</span>${left === null ? "" : `<span class="chip stock">재고 ${Math.max(0, left)}</span>`}</span>
+      </button>
+      <button class="btn-small" data-edit-item="${esc(it.id)}">수정</button>
+    </div>`;
+  }).join("");
+}
+
+// Step 1: pick a product from the shared catalog.
+function openProductPicker() {
+  openSheet("제품 목록에서 고르기", `<input id="pickSearch" class="search" type="search" placeholder="제품명이나 브랜드로 찾기" aria-label="제품 검색"><div id="pickList"></div>`);
+  renderProductPicker("");
+}
+
+function renderProductPicker(q) {
+  const box = $("#pickList");
+  if (!box) return;
+  const query = q.trim().toLowerCase();
+  const mine = new Set(state.items.map((it) => it.productId).filter(Boolean));
+  const list = state.products.filter((p) => !query || productLabel(p).toLowerCase().includes(query));
+  box.innerHTML = list.length ? list.map((p) => `<button type="button" class="opt pick-row" data-pick-product="${esc(p.id)}">
+      ${thumbHtml(p.name, isSafePhoto(p.photo) ? p.photo : null, "opt-photo")}
+      <span class="opt-text">${p.brand ? `<span class="opt-brand">${esc(p.brand)}</span>` : ""}<span class="opt-name">${esc(p.name)}</span><span class="opt-brand">${esc(describeAmount(p))}</span></span>
+      ${mine.has(p.id) ? `<span class="chip taken">추가됨</span>` : ""}
+    </button>`).join("")
+    : `<p class="mc-note">${query ? `"${esc(q)}"에 맞는 제품이 없어요.` : "제품 목록이 비어 있어요."}${isAdmin() ? " 제품 탭에서 추가할 수 있어요." : " 관리자에게 추가를 요청해주세요."}</p>`;
+}
+
+// Step 2: how much, when, which days, and how many are on hand.
+function openItemSheet(itemId, fromProductId) {
+  const it = itemId ? state.items.find((x) => x.id === itemId) : null;
+  const prod = productById(fromProductId || (it && it.productId));
+  const base = it || { perDose: 1, timeMinutes: 8 * 60, days: [1, 2, 3, 4, 5, 6, 7], productId: prod ? prod.id : null };
+  const name = prod ? prod.name : (it && it.name) || "";
+  const stock = prod ? (invCount(prod.id) ?? prod.count ?? 30) : "";
+  openSheet(it ? "추가 영양제 수정" : "추가 영양제 등록", `
+    <form id="itemForm" data-id="${esc(itemId || "")}" data-product="${esc(base.productId || "")}">
+      ${prod ? `<div class="pick-head">${productRow(prod.id)}<a class="iherb-link" target="_blank" rel="noopener" href="${esc(safeIherbUrl(prod.url, productLabel(prod)))}">아이허브에서 보기 →</a></div>`
+        : `<div class="field"><label for="fName">이름</label><input id="fName" required maxlength="80" value="${esc(name)}"></div>`}
+      <div class="row2">
+        <div class="field"><label for="fDose">한 번에</label><input id="fDose" type="number" min="0.5" step="0.5" inputmode="decimal" value="${esc(extraAmount(base))}"></div>
+        <div class="field"><label for="fTime">먹는 시간</label><input id="fTime" type="time" value="${fmtTime(base.timeMinutes ?? 480)}"></div>
+      </div>
+      <div class="field"><span class="label-like">요일</span>
+        <div class="days">${DAY_LABELS.map((l, i) => `<button type="button" class="day-chip ${base.days.includes(i + 1) ? "on" : ""}" data-day="${i + 1}" aria-pressed="${base.days.includes(i + 1)}">${l}</button>`).join("")}</div>
+      </div>
+      ${prod ? `<div class="field"><label for="fStock">지금 가지고 있는 개수</label><input id="fStock" type="number" min="0" inputmode="numeric" value="${esc(stock)}">
+        <p class="hint">재고 탭과 같은 숫자예요. 오늘 탭에서 완료를 누르면 줄어들어요.</p></div>` : ""}
+      <div class="sheet-actions">
+        <button type="button" class="btn-secondary" data-close-sheet>취소</button>
+        <button type="submit" class="btn-primary">저장</button>
+      </div>
+      ${it ? `<button type="button" class="btn-danger-text" data-delete-item="${esc(it.id)}">추가 영양제에서 빼기</button>` : ""}
+    </form>`);
+}
+
+async function saveItemForm(form) {
+  const pid = form.dataset.product || null;
+  const prod = pid ? productById(pid) : null;
+  const name = prod ? prod.name : ($("#fName") ? $("#fName").value.trim() : "");
+  if (!name) { if ($("#fName")) $("#fName").focus(); return; }
+  const days = [...form.querySelectorAll(".day-chip.on")].map((b) => parseInt(b.dataset.day, 10));
+  if (!days.length) { toast("요일을 하나 이상 골라주세요."); return; }
+  const [hh, mm] = ($("#fTime").value || "08:00").split(":").map(Number);
+  const perDose = Math.max(0.5, parseFloat($("#fDose").value) || 1);
+  const data = { name, productId: pid, perDose, timeMinutes: (hh || 0) * 60 + (mm || 0), days };
+  const uid = state.user.uid;
+  try {
+    const batch = writeBatch(db);
+    if (form.dataset.id) batch.update(doc(db, "users", uid, "items", form.dataset.id), data);
+    else batch.set(doc(collection(db, "users", uid, "items")), { ...data, createdDay: epochDay(), createdAt: serverTimestamp() });
+    const stockInput = $("#fStock");
+    if (pid && stockInput && stockInput.value !== "") {
+      batch.set(doc(db, "users", uid, "inventory", pid), { count: Math.max(0, parseInt(stockInput.value, 10) || 0), updatedAt: serverTimestamp() }, { merge: true });
+    }
+    await batch.commit();
+    closeSheet();
+    toast(form.dataset.id ? "수정했어요." : "추가 영양제에 넣었어요. 오늘 탭에 나와요.");
+  } catch (e) { fail(e); }
 }
 
 // ---------- me ----------
@@ -871,31 +1111,40 @@ function renderMe() {
   $("#meEmail").textContent = u.email || "";
   const admin = isAdmin();
   const noAdmin = state.adminUids !== null && state.adminUids.length === 0;
-  $("#meRole").textContent = admin ? "관리자 — 공용 제품 목록을 수정할 수 있어요" : "사용자 — 공용 목록을 보고 내 스케줄에 담을 수 있어요";
+  $("#meRole").textContent = admin ? "관리자 — 제품 탭에서 공용 제품 목록을 관리해요" : "";
   $("#claimAdmin").hidden = !noAdmin;
   renderLowStock();
+  if (state.tab === "me") renderHistory();
   const notify = localStorage.getItem("notify") === "1" && "Notification" in window && Notification.permission === "granted";
   $("#notifyBtn").textContent = notify ? "알림 끄기" : "알림 켜기";
   $("#notifyState").textContent = notify ? "켜짐 — 이 앱이 열려 있는 동안 복용 시간에 알려드려요." : "꺼짐";
 }
 
+const TABS = ["today", "rotation", "extras", "inventory", "me", "products"];
+
 function renderAll() {
   if (!state.user) return;
+  const admin = isAdmin();
+  $("#tabProducts").hidden = !admin;
+  if (state.tab === "products" && state.adminUids !== null && !admin) { switchTab("today"); return; }
   renderHeader();
   renderToday();
-  renderProducts();
   renderRotation();
+  renderExtras();
+  renderInventory();
+  if (admin) renderProducts();
   renderMe();
-  $("#fab").hidden = !(state.tab === "today" || state.tab === "products");
-  $("#fab").setAttribute("aria-label", state.tab === "products" ? "아이허브 링크로 추가" : "영양제 직접 추가");
 }
 
 function switchTab(tab) {
+  if (!TABS.includes(tab)) tab = "today";
   state.tab = tab;
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
   document.querySelectorAll(".panel").forEach((p) => { p.hidden = p.dataset.panel !== tab; });
   try { localStorage.setItem("tab", tab); } catch { /* private mode */ }
+  window.scrollTo(0, 0);
   renderAll();
+  if (tab === "me") loadHistory();
 }
 
 // ---------- sheets ----------
@@ -935,76 +1184,6 @@ async function handlePhotoInput(input, onDone) {
     onDone(data);
   } catch (e) { toast(e.message); }
   input.value = "";
-}
-
-function openItemSheet(itemId, fromProductId) {
-  const it = itemId ? state.items.find((x) => x.id === itemId) : null;
-  const prod = productById(fromProductId || (it && it.productId));
-  const base = it || {
-    name: prod ? prod.name : "",
-    dosage: prod ? describeAmount(prod) : "",
-    stockCount: prod && prod.count ? prod.count : 30,
-    lowStockThreshold: 5,
-    timeMinutes: 8 * 60,
-    days: [1, 2, 3, 4, 5, 6, 7],
-    productId: prod ? prod.id : null,
-    photo: null
-  };
-  sheetPhoto = isSafePhoto(base.photo) ? base.photo : null;
-  const usesProductPhoto = prod && isSafePhoto(prod.photo);
-  openSheet(it ? "영양제 수정" : "영양제 추가", `
-    <form id="itemForm" data-id="${esc(itemId || "")}" data-product="${esc(base.productId || "")}">
-      ${usesProductPhoto
-        ? `<div class="photo-field"><div class="photo-preview"><img alt="" src="${prod.photo}"></div><p class="hint">공용 제품 목록의 사진을 쓰고 있어요.</p></div>`
-        : photoPicker(sheetPhoto, "직접 찍은 영양제 통 사진을 추천해요. 이 사진은 나만 볼 수 있어요.")}
-      <div class="field"><label for="fName">이름</label>
-        <input id="fName" required maxlength="80" value="${esc(base.name)}" placeholder="예: 오메가3">
-        <a class="iherb-link" id="fNameIherb" target="_blank" rel="noopener" href="${esc(prod ? safeIherbUrl(prod.url, prod.name) : safeIherbUrl(base.url, base.name))}">아이허브에서 보기 →</a>
-      </div>
-      <div class="field"><label for="fDosage">용량 / 설명</label>
-        <input id="fDosage" maxlength="80" value="${esc(base.dosage)}" placeholder="예: 1,000 mg · 1캡슐"></div>
-      <div class="row2">
-        <div class="field"><label for="fStock">현재 재고</label><input id="fStock" type="number" min="0" inputmode="numeric" value="${esc(base.stockCount)}"></div>
-        <div class="field"><label for="fLow">부족 알림 기준</label><input id="fLow" type="number" min="0" inputmode="numeric" value="${esc(base.lowStockThreshold)}"></div>
-      </div>
-      <div class="field"><label for="fTime">복용 시간</label><input id="fTime" type="time" value="${fmtTime(base.timeMinutes)}"></div>
-      <div class="field"><span class="label-like">요일</span>
-        <div class="days">${DAY_LABELS.map((l, i) => `<button type="button" class="day-chip ${base.days.includes(i + 1) ? "on" : ""}" data-day="${i + 1}" aria-pressed="${base.days.includes(i + 1)}">${l}</button>`).join("")}</div>
-      </div>
-      <div class="sheet-actions">
-        <button type="button" class="btn-secondary" data-close-sheet>취소</button>
-        <button type="submit" class="btn-primary">저장</button>
-      </div>
-      ${it ? `<button type="button" class="btn-danger-text" data-delete-item="${esc(it.id)}">이 영양제 삭제</button>` : ""}
-    </form>`);
-}
-
-async function saveItemForm(form) {
-  const name = $("#fName").value.trim();
-  if (!name) { $("#fName").focus(); return; }
-  const days = [...form.querySelectorAll(".day-chip.on")].map((b) => parseInt(b.dataset.day, 10));
-  if (!days.length) { toast("요일을 하나 이상 골라주세요."); return; }
-  const [hh, mm] = ($("#fTime").value || "08:00").split(":").map(Number);
-  const data = {
-    name,
-    dosage: $("#fDosage").value.trim(),
-    stockCount: Math.max(0, parseInt($("#fStock").value, 10) || 0),
-    lowStockThreshold: Math.max(0, parseInt($("#fLow").value, 10) || 0),
-    timeMinutes: (hh || 0) * 60 + (mm || 0),
-    days,
-    productId: form.dataset.product || null,
-    photo: form.dataset.product && productById(form.dataset.product)?.photo ? null : sheetPhoto
-  };
-  const uid = state.user.uid;
-  try {
-    if (form.dataset.id) {
-      await updateDoc(doc(db, "users", uid, "items", form.dataset.id), data);
-    } else {
-      await addDoc(collection(db, "users", uid, "items"), { ...data, createdDay: epochDay(), createdAt: serverTimestamp() });
-    }
-    closeSheet();
-    toast("저장했어요.");
-  } catch (e) { fail(e); }
 }
 
 function openProductSheet(productId) {
@@ -1089,7 +1268,7 @@ function renderImportRows() {
     </div>`).join("") +
     `<div class="sheet-actions"><button type="button" class="btn-secondary" data-close-sheet>취소</button>
       <button type="button" class="btn-primary" id="importSave">${admin ? "공용 목록에 저장" : "내 스케줄에 추가"} (${importRows.filter((r) => !r.duplicate).length}개)</button></div>
-    ${admin ? `<label class="check"><input type="checkbox" id="importAlsoMine" checked> 내 스케줄에도 추가 (매일 08:00, 나중에 수정 가능)</label>` : ""}`;
+`;
 }
 
 function parseImport() {
@@ -1122,38 +1301,16 @@ async function saveImport() {
   }
   const rows = importRows.filter((r) => !r.duplicate);
   if (!rows.length) { toast("저장할 제품이 없어요."); return; }
-  const alsoMine = admin && $("#importAlsoMine") && $("#importAlsoMine").checked;
+  if (!admin) { toast("제품 추가는 관리자만 할 수 있어요."); return; }
   const uid = state.user.uid;
   try {
     const batch = writeBatch(db);
     for (const r of rows) {
-      const product = {
+      batch.set(doc(collection(db, "products")), {
         name: r.name.trim(), brand: (r.brand || "").trim(), dose: (r.dose || "").trim(),
         count: r.count || null, form: r.form || "", volume: r.volume || "",
-        url: r.url, iherbId: r.iherbId, photo: r.photo || null
-      };
-      let productId = null;
-      if (admin) {
-        const ref = doc(collection(db, "products"));
-        productId = ref.id;
-        batch.set(ref, { ...product, createdBy: uid, createdAt: serverTimestamp() });
-      }
-      if (!admin || alsoMine) {
-        batch.set(doc(collection(db, "users", uid, "items")), {
-          name: product.name,
-          dosage: describeAmount(product),
-          stockCount: product.count || 30,
-          lowStockThreshold: 5,
-          timeMinutes: 8 * 60,
-          days: [1, 2, 3, 4, 5, 6, 7],
-          productId,
-          iherbId: product.iherbId,
-          url: product.url,
-          photo: admin ? null : product.photo,
-          createdDay: epochDay(),
-          createdAt: serverTimestamp()
-        });
-      }
+        url: r.url, iherbId: r.iherbId, photo: r.photo || null, createdBy: uid, createdAt: serverTimestamp()
+      });
     }
     await batch.commit();
     closeSheet();
@@ -1168,13 +1325,11 @@ function checkReminders() {
   const now = new Date();
   const mins = now.getHours() * 60 + now.getMinutes();
   const day = epochDay(now);
-  for (const { item, status } of todayItems()) {
-    if (status !== "PENDING" || item.timeMinutes !== mins) continue;
-    const key = "notified_" + day + "_" + item.id;
-    if (localStorage.getItem(key)) continue;
-    localStorage.setItem(key, "1");
-    try { new Notification("복용 시간이에요", { body: `${item.name} ${item.dosage ? "(" + item.dosage + ")" : ""}`, icon: "icons/icon-192.png" }); } catch { /* some mobile browsers only allow SW notifications */ }
-  }
+  const due = todayEntries().filter((e) => e.status === "PENDING" && e.minutes === mins);
+  const fresh = due.filter((e) => !localStorage.getItem("notified_" + day + "_" + e.key));
+  if (!fresh.length) return;
+  fresh.forEach((e) => localStorage.setItem("notified_" + day + "_" + e.key, "1"));
+  try { new Notification("복용 시간이에요", { body: fresh.map(entryName).join(", "), icon: "icons/icon-192.png" }); } catch { /* some mobile browsers only allow SW notifications */ }
 }
 
 // ---------- data subscriptions ----------
@@ -1190,13 +1345,26 @@ function subscribe(uid) {
   }, fail));
   unsubs.push(onSnapshot(collection(db, "users", uid, "items"), (s) => {
     state.items = s.docs.map((d) => ({ id: d.id, ...d.data() }));
+    state.itemsLoaded = true;
+    migrateStock();
+    renderAll();
+  }, fail));
+  unsubs.push(onSnapshot(collection(db, "users", uid, "inventory"), (s) => {
+    const inv = {};
+    s.docs.forEach((d) => { const c = d.data().count; if (typeof c === "number") inv[d.id] = c; });
+    state.inventory = inv;
+    state.inventoryLoaded = true;
+    migrateStock();
     renderAll();
   }, fail));
   unsubs.push(onSnapshot(query(collection(db, "users", uid, "logs"), where("day", ">=", today - 6)), (s) => {
     const logs = {};
-    s.docs.forEach((d) => { const v = d.data(); logs[v.day + "_" + v.itemId] = v.status; });
+    s.docs.forEach((d) => { const v = d.data(); logs[v.day + "_" + (v.key || "ex-" + v.itemId)] = v.status; });
     state.logs = logs;
+    const first = !state.logsLoaded;
+    state.logsLoaded = true;
     renderAll();
+    if (first && state.tab === "me") loadHistory();
   }, fail));
   unsubs.push(onSnapshot(doc(db, "config", "rotation"), (s) => {
     state.plan = s.exists() && validPlan(s.data()) ? s.data() : null;
@@ -1206,10 +1374,39 @@ function subscribe(uid) {
   unsubs.push(onSnapshot(doc(db, "users", uid, "meta", "cycle"), (s) => {
     state.cycle = s.exists() ? s.data() : null;
     state.cycleLoaded = true;
-    renderRotation();
-    if (state.user) renderMe();
+    migrateStock();
+    renderAll();
   }, fail));
 }
+// Counts used to live on the cycle (estimated by date) and on each schedule item.
+// Move them into 재고 once, without overwriting counts that are already there.
+let migrated = false;
+async function migrateStock() {
+  if (migrated || !state.user || !state.cycleLoaded || !state.inventoryLoaded || !state.itemsLoaded) return;
+  migrated = true;
+  const uid = state.user.uid;
+  const today = epochDay();
+  const batch = writeBatch(db);
+  let writes = 0;
+  const cy = state.cycle;
+  if (cy && cy.stock) {
+    const use = dailyUse(allItems(cy));
+    for (const [pid, entry] of Object.entries(cy.stock)) {
+      if (invCount(pid) !== null) continue;
+      batch.set(doc(db, "users", uid, "inventory", pid), { count: remaining(entry, use[pid] || 0, today) ?? 0, updatedAt: serverTimestamp() }, { merge: true });
+      writes++;
+    }
+    batch.update(doc(db, "users", uid, "meta", "cycle"), { stock: deleteField() });
+    writes++;
+  }
+  for (const it of state.items) {
+    if (!it.productId || typeof it.stockCount !== "number" || invCount(it.productId) !== null) continue;
+    batch.set(doc(db, "users", uid, "inventory", it.productId), { count: it.stockCount, updatedAt: serverTimestamp() }, { merge: true });
+    writes++;
+  }
+  if (writes) { try { await batch.commit(); } catch (e) { console.error(e); } }
+}
+
 function unsubscribeAll() {
   unsubs.forEach((u) => u());
   unsubs = [];
@@ -1229,8 +1426,15 @@ function wire() {
     signInTestUser(sub, email, name).catch(fail);
   }));
   document.querySelectorAll(".tab-btn").forEach((b) => b.addEventListener("click", () => switchTab(b.dataset.tab)));
-  $("#fab").addEventListener("click", () => (state.tab === "products" ? openImportSheet() : openItemSheet(null, null)));
-  $("#logout").addEventListener("click", () => logOut());
+  $("#importOpen").addEventListener("click", openImportSheet);
+  $("#extraAdd").addEventListener("click", openProductPicker);
+  $("#invRestock").addEventListener("click", () => openRestockSheet());
+  document.querySelectorAll("[data-history]").forEach((b) => b.addEventListener("click", () => {
+    historyState.by = b.dataset.history;
+    renderHistory();
+  }));
+  // Stop listening first, or the listeners fire permission errors once auth is gone.
+  $("#logout").addEventListener("click", () => { unsubscribeAll(); logOut(); });
   $("#productSearch").addEventListener("input", (e) => { state.productQuery = e.target.value; renderProducts(); });
 
   $("#claimAdmin").addEventListener("click", async () => {
@@ -1254,7 +1458,7 @@ function wire() {
 
   document.addEventListener("click", (e) => {
     if (handleEditorClick(e) || handleSetupClick(e) || handleRestockClick(e)) return;
-    const t = e.target.closest("[data-take],[data-skip],[data-undo],[data-edit-item],[data-adopt],[data-edit-product],[data-close-sheet],[data-delete-item],[data-delete-product],[data-photo-clear],[data-import-remove],.day-chip,#importParse,#importSave,#rotEdit,#rotStart,#cyStock,#cyNext,#cyReset,#cyConfirm,[data-restock]");
+    const t = e.target.closest("[data-take],[data-skip],[data-undo],[data-edit-item],[data-adopt],[data-edit-product],[data-close-sheet],[data-delete-item],[data-delete-product],[data-photo-clear],[data-import-remove],.day-chip,#importParse,#importSave,#rotEdit,#rotStart,#cyStock,#cyNext,#cyReset,#cyConfirm,[data-restock],[data-goto],[data-pick-product],[data-inv-edit]");
     if (!t) return;
     if (t.dataset.take) setStatus(t.dataset.take, "TAKEN");
     else if (t.dataset.skip) setStatus(t.dataset.skip, "SKIPPED");
@@ -1264,7 +1468,7 @@ function wire() {
     else if (t.dataset.editProduct) openProductSheet(t.dataset.editProduct);
     else if ("closeSheet" in t.dataset) closeSheet();
     else if (t.dataset.deleteItem) {
-      if (!confirm("이 영양제를 내 스케줄에서 삭제할까요?")) return;
+      if (!confirm("이 영양제를 추가 영양제에서 뺄까요? 재고 개수는 그대로 남아요.")) return;
       deleteDoc(doc(db, "users", state.user.uid, "items", t.dataset.deleteItem)).then(() => { closeSheet(); toast("삭제했어요."); }, fail);
     } else if (t.dataset.deleteProduct) {
       if (!confirm("공용 목록에서 삭제하면 모든 사용자에게서 사라져요. 삭제할까요?")) return;
@@ -1284,7 +1488,10 @@ function wire() {
     else if (t.id === "rotEdit") openRotationEditor();
     else if (t.id === "rotStart") startFirstCycle();
     else if (t.id === "cyStock") openStockSheet();
-    else if ("restock" in t.dataset) openRestockSheet();
+    else if ("restock" in t.dataset) openRestockSheet(t.dataset.restock || undefined);
+    else if (t.dataset.goto) switchTab(t.dataset.goto);
+    else if (t.dataset.pickProduct) openItemSheet(null, t.dataset.pickProduct);
+    else if (t.dataset.invEdit) openInventoryEdit([t.dataset.invEdit]);
     else if (t.id === "cyNext") openCycleSetup(nextCycle(state.plan, state.cycle).methodIndex);
     else if (t.id === "cyReset") resetCycle();
     else if (t.id === "cyConfirm") confirmCycle();
@@ -1316,7 +1523,7 @@ function wire() {
   document.addEventListener("input", (e) => {
     const t = e.target;
     if (handleEditorInput(t)) return;
-    if (t.id === "fName") $("#fNameIherb").href = iherbSearchUrl(t.value);
+    if (t.id === "pickSearch") renderProductPicker(t.value);
     else if (t.dataset.imp) {
       const row = importRows[parseInt(t.closest(".import-row").dataset.index, 10)];
       row[t.dataset.imp] = t.dataset.imp === "count" ? (parseInt(t.value, 10) || null) : t.value;
@@ -1340,6 +1547,9 @@ function boot() {
     state.user = user;
     state.adminUids = null;
     state.products = []; state.items = []; state.logs = {}; state.plan = null; state.planLoaded = false; state.cycle = null; state.cycleLoaded = false;
+    state.itemsLoaded = false; state.inventory = {}; state.inventoryLoaded = false; state.logsLoaded = false;
+    historyState.logs = null; historyState.loadedAt = 0; historyState.loading = false;
+    migrated = false;
     if (!user) { closeSheet(); showScreen("screenLogin"); return; }
     showScreen("screenApp");
     switchTab(state.tab);

@@ -31,7 +31,7 @@ button{cursor:pointer}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 img{max-width:100%}
 
-.shell{max-width:520px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 18px calc(110px + env(safe-area-inset-bottom))}
+.shell{max-width:520px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 18px calc(96px + env(safe-area-inset-bottom))}
 
 /* login / setup */
 .center-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
@@ -258,3 +258,53 @@ img{max-width:100%}
 @media (min-width:640px){ .pgrid{grid-template-columns:1fr 1fr} .pcard{flex-direction:column} .pphoto{width:100%;height:150px} }
 @media (prefers-reduced-motion:no-preference){ .sheet{animation:sheet-in .22s ease} }
 @keyframes sheet-in{from{transform:translateY(24px);opacity:0}to{transform:none;opacity:1}}
+
+/* bottom tab bar */
+.tabbar{position:fixed;left:0;right:0;bottom:0;z-index:20;display:flex;justify-content:center;background:var(--surface);border-top:1px solid var(--border);padding:6px max(6px,calc(50% - 260px)) calc(6px + env(safe-area-inset-bottom))}
+.tabbar .tab-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;border:none;background:none;color:var(--ink-muted);font-size:.66rem;font-weight:600;line-height:1.15;padding:4px 2px;border-radius:12px;text-align:center;word-break:keep-all}
+.tabbar .tab-btn svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.tabbar .tab-btn.on{color:var(--accent);background:var(--accent-soft)}
+body.sheet-open .tabbar{visibility:hidden}
+
+/* today */
+.item.done{opacity:.72}
+.item-body{cursor:default}
+button.item-body{cursor:pointer}
+.chip.kind{background:var(--surface-2);color:var(--ink-muted);border:1px solid var(--border);font-family:var(--font-body)}
+.chip.kind.cycle{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+.chip.kind.base{background:#E4EBF4;color:#3E5C8A;border-color:transparent}
+.chip.kind.extra{background:var(--warn-soft);color:var(--warn);border-color:transparent}
+.chip.stock{background:var(--surface-2);color:var(--ink-muted);font-family:var(--font-mono)}
+.empty-actions{display:flex;gap:8px;justify-content:center;margin-top:8px}
+.add-btn{margin-top:12px}
+.pick-row{width:100%;text-align:left;margin-bottom:6px;cursor:pointer}
+.pick-row .opt-text{flex:1}
+.pick-head{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
+.pick-head .iherb-link{align-self:flex-end}
+
+/* inventory */
+.inv-row{border:1px solid var(--border);border-radius:var(--radius-card);background:var(--surface);padding:10px;margin-bottom:10px;box-shadow:var(--shadow)}
+.inv-row.low{border-color:var(--warn)}
+.inv-row .cy-prod{border:none;background:none;padding:0}
+.inv-count{flex-shrink:0;font-family:var(--font-mono);font-size:1.3rem;font-weight:600;padding-right:4px}
+.inv-count small{font-size:.72rem;color:var(--ink-muted);margin-left:2px}
+.inv-meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:8px 0 0}
+.inv-sub{font-size:.78rem;color:var(--ink-muted)}
+.inv-sub.low{color:var(--warn);font-weight:600}
+.inv-actions{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:8px}
+.inv-actions .iherb-link{margin-right:auto}
+.sub-head{font-size:.78rem;font-weight:600;letter-spacing:.04em;color:var(--ink-muted);margin:16px 2px 8px}
+
+/* history */
+.seg{display:flex;border:1px solid var(--border);border-radius:var(--radius-pill);overflow:hidden}
+.seg button{border:none;background:none;padding:6px 12px;font-size:.78rem;font-weight:600;color:var(--ink-muted)}
+.seg button.on{background:var(--accent);color:var(--accent-ink)}
+#historyList{margin-top:10px}
+.hist{border-top:1px solid var(--border);padding:10px 0}
+.hist:first-child{border-top:none}
+.hist-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
+.hist-stats{font-family:var(--font-mono);font-size:.74rem;color:var(--ink-muted)}
+.hist-cycles{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px;font-size:.8rem}
+.hist-kind{display:flex;gap:8px;align-items:flex-start;margin-top:6px;font-size:.84rem}
+.hist-kind .chip{flex-shrink:0}
+.hist-prods small{color:var(--ink-muted);font-family:var(--font-mono)}

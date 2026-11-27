@@ -56,31 +56,18 @@
         <div class="date" id="todayLabel"></div>
       </div>
       <div class="ring-wrap">
-        <svg width="58" height="58" viewBox="0 0 58 58" role="img" aria-label="최근 7일 복용률">
+        <svg width="58" height="58" viewBox="0 0 58 58" role="img" aria-label="오늘 복용률">
           <circle cx="29" cy="29" r="24" fill="none" stroke="var(--border)" stroke-width="6"></circle>
           <circle id="ringProgress" cx="29" cy="29" r="24" fill="none" stroke="var(--accent)" stroke-width="6" stroke-linecap="round" stroke-dasharray="150.8" stroke-dashoffset="150.8" transform="rotate(-90 29 29)"></circle>
           <text id="ringPct" x="29" y="33" text-anchor="middle" class="ring-pct" font-size="14" fill="var(--ink)">0%</text>
         </svg>
-        <div class="ring-label">최근 7일</div>
+        <div class="ring-label">오늘</div>
       </div>
     </header>
-
-    <nav class="tabs" aria-label="화면 전환">
-      <button class="tab-btn on" type="button" data-tab="today">오늘</button>
-      <button class="tab-btn" type="button" data-tab="products">제품</button>
-      <button class="tab-btn" type="button" data-tab="rotation">유산균</button>
-      <button class="tab-btn" type="button" data-tab="me">내 정보</button>
-    </nav>
 
     <main>
       <section class="panel" data-panel="today">
         <div id="todayList"></div>
-      </section>
-
-      <section class="panel" data-panel="products" hidden>
-        <input id="productSearch" class="search" type="search" placeholder="제품명이나 브랜드로 찾기" aria-label="제품 검색">
-        <p id="productsAdminNote" class="hint" hidden>관리자 모드: 여기서 추가·수정한 제품은 모든 사용자에게 보여요.</p>
-        <div id="productGrid" class="pgrid"></div>
       </section>
 
       <section class="panel" data-panel="rotation" hidden>
@@ -99,17 +86,41 @@
         </div>
       </section>
 
+      <section class="panel" data-panel="extras" hidden>
+        <div class="rot-top">
+          <p class="hint">유산균 사이클 말고 따로 챙겨 먹는 영양제예요. 오늘 탭에 같이 나와요.</p>
+        </div>
+        <div id="extrasList"></div>
+        <button id="extraAdd" class="btn-primary wide add-btn" type="button">+ 제품 목록에서 추가</button>
+      </section>
+
+      <section class="panel" data-panel="inventory" hidden>
+        <div class="rot-top">
+          <p class="hint">오늘 탭에서 완료를 누르면 그만큼 줄어들어요. 새로 산 통은 "새 통 추가"로 더하세요.</p>
+          <button id="invRestock" class="btn-small primary" type="button">새 통 추가</button>
+        </div>
+        <div id="invList"></div>
+      </section>
+
       <section class="panel" data-panel="me" hidden>
+        <div class="me-card">
+          <div class="me-row"><strong>곧 떨어지는 제품</strong><span class="chip low" id="lowCount"></span></div>
+          <p class="hint">재고가 10일 치도 안 남은 제품이에요. 눌러서 아이허브에서 바로 주문하세요.</p>
+          <div id="lowStock"></div>
+        </div>
+        <div class="me-card">
+          <div class="me-row"><strong>히스토리</strong>
+            <div class="seg" role="group" aria-label="기간">
+              <button type="button" class="on" data-history="day">일별</button><button type="button" data-history="week">주별</button><button type="button" data-history="month">월별</button>
+            </div>
+          </div>
+          <div id="historyList"></div>
+        </div>
         <div class="me-card">
           <div class="me-name" id="meName"></div>
           <div class="me-email" id="meEmail"></div>
           <div class="me-role" id="meRole"></div>
           <button id="claimAdmin" class="btn-primary" type="button" hidden>내가 관리자 하기 (처음 한 번만)</button>
-        </div>
-        <div class="me-card">
-          <div class="me-row"><strong>곧 떨어지는 제품</strong><span class="chip low" id="lowCount"></span></div>
-          <p class="hint">남은 개수가 10개 미만인 제품이에요. 눌러서 아이허브에서 바로 주문하세요.</p>
-          <div id="lowStock"></div>
         </div>
         <div class="me-card">
           <div class="me-row"><div><strong>복용 알림</strong><div class="hint" id="notifyState"></div></div>
@@ -124,14 +135,30 @@
           <strong>알아두세요</strong>
           <ol>
             <li>지금은 앱이 열려 있을 때만 복용 알림이 와요.</li>
-            <li>아이허브 링크는 아이허브 사이트에 접속하지 않고 주소 글자만 읽어서 정리해요. 가격과 사진은 가져오지 않아요.</li>
           </ol>
         </div>
         <button id="logout" class="btn-secondary wide" type="button">로그아웃</button>
       </section>
+
+      <section class="panel" data-panel="products" hidden>
+        <div class="rot-top">
+          <p class="hint">관리자만 보는 화면이에요. 여기서 추가·수정한 제품은 모든 사용자에게 보여요.</p>
+          <button id="importOpen" class="btn-small primary" type="button">+ 아이허브 링크로 추가</button>
+        </div>
+        <input id="productSearch" class="search" type="search" placeholder="제품명이나 브랜드로 찾기" aria-label="제품 검색">
+        <div id="productGrid" class="pgrid"></div>
+      </section>
     </main>
   </div>
-  <button id="fab" class="fab" type="button" aria-label="영양제 직접 추가">+</button>
+
+  <nav class="tabbar" aria-label="화면 전환">
+    <button class="tab-btn on" type="button" data-tab="today"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.5 2.5L16 9.5"/></svg><span>오늘</span></button>
+    <button class="tab-btn" type="button" data-tab="rotation"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.5-4.6M4 13a8 8 0 0 0 14.5 4.6"/><path d="M5 3v4h4M19 21v-4h-4"/></svg><span>유산균 사이클</span></button>
+    <button class="tab-btn" type="button" data-tab="extras"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="8.5" width="17" height="7" rx="3.5" transform="rotate(-45 12 12)"/><path d="M9.5 9.5l5 5"/></svg><span>추가 영양제</span></button>
+    <button class="tab-btn" type="button" data-tab="inventory"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 8L12 4l8.5 4v8L12 20l-8.5-4z"/><path d="M3.5 8L12 12l8.5-4M12 12v8"/></svg><span>재고</span></button>
+    <button class="tab-btn" type="button" data-tab="me"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="3.5"/><path d="M5 20c1-3.5 3.8-5.5 7-5.5s6 2 7 5.5"/></svg><span>내 정보</span></button>
+    <button class="tab-btn" type="button" data-tab="products" id="tabProducts" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg><span>제품</span></button>
+  </nav>
 </div>
 
 <div id="scrim" class="scrim" hidden>

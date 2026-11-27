@@ -65,6 +65,17 @@ test("products reject non-image photo data and empty names", async () => {
   await denied(setDoc(doc(owner.db, "products", "p4"), { name: "" }));
 });
 
+test("only the admin edits the shared rotation; everyone signed in reads it", async () => {
+  const plan = { startYear: 2026, startMonth: 11, methods: [{ id: "m1", title: "섭취법 1", lunch: [], dinner: [] }] };
+  await setDoc(doc(owner.db, "config", "rotation"), plan);
+  await denied(setDoc(doc(friend.db, "config", "rotation"), { ...plan, startMonth: 1 }));
+  await denied(deleteDoc(doc(friend.db, "config", "rotation")));
+  await denied(setDoc(doc(owner.db, "config", "rotation"), { ...plan, methods: [] }));
+  const snap = await getDoc(doc(friend.db, "config", "rotation"));
+  assert.equal(snap.data().startMonth, 11);
+  await denied(getDoc(doc(stranger.db, "config", "rotation")));
+});
+
 test("personal data is private to its owner", async () => {
   await setDoc(doc(owner.db, "users", owner.uid, "items", "i1"), { name: "Mine" });
   await setDoc(doc(owner.db, "users", owner.uid, "meta", "rotation"), { rows: [], notes: "secret" });

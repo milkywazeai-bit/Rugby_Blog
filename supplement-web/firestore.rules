@@ -31,6 +31,16 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Shared probiotic rotation plan: everyone signed in reads it, only admins change it.
+    match /config/rotation {
+      allow read: if signedIn();
+      allow write: if isAdmin()
+        && request.resource.data.methods is list
+        && request.resource.data.methods.size() > 0
+        && request.resource.data.methods.size() <= 12
+        && request.resource.data.startMonth is int;
+    }
+
     // Shared catalog: everyone signed in can read, only admins can write.
     match /products/{productId} {
       allow read: if signedIn();

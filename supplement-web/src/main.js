@@ -7,33 +7,21 @@ import {
 } from "./firebase.js";
 import { parseIherbLinks, findUnsupportedLinks, iherbSearchUrl, describeAmount, isIherbUrl } from "./iherb.js";
 import { compressPhoto, isSafePhoto } from "./photo.js";
+import { defaultPlan, planForMonth, upcomingMonths, validPlan } from "./rotation.js";
 
 const DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"];
 const CAPSULE_PAIRS = [
   ["#2F6F4F", "#DDEAE1"], ["#A5701F", "#F3E5CB"], ["#A24632", "#F2DFD8"],
   ["#3E5C8A", "#DDE6F2"], ["#7A4E8C", "#EADFF0"]
 ];
-const ROTATION_EXAMPLE = {
-  rows: [
-    { id: "r1", month: "1월", code: "1-1", lunch: "", dinner: "" },
-    { id: "r2", month: "2월", code: "2-1", lunch: "", dinner: "" },
-    { id: "r3", month: "3월", code: "3-1", lunch: "", dinner: "" },
-    { id: "r4", month: "4월", code: "1-2", lunch: "", dinner: "" }
-  ],
-  notes:
-    "[사이클 규칙]\n1번 제품중 택1 하여 섭취\n2번 제품중 택1 하여 섭취 + 플로라제품\n3번 제품중 택1 하여 섭취 + 폴리페놀 or NAG\n\n" +
-    "[섭취법 1] 점심: 가든 유산균, 발효효소, 칼마부티르산, 애사비 각 1캡슐 / 저녁: 칼마 부티르산, 애사비, 비타민C+아연 각 1캡슐\n" +
-    "[섭취법 2] 점심: 다균주 제품, 플로라파지, 발효효소, 칼마부티르산, 애사비 각 1캡슐 / 저녁: 칼마 부티르산, 애사비, 비타민C+아연 각 1캡슐\n" +
-    "[섭취법 3] 점심: 점막개선 제품, 폴리페놀, 발효효소, 칼마부티르산, 애사비 각 1캡슐 / 저녁: 칼마 부티르산, 애사비, 비타민C+아연 각 1캡슐"
-};
-
 const state = {
   user: null,
   adminUids: null,
   products: [],
   items: [],
   logs: {},
-  rotation: null,
+  plan: null,
+  planLoaded: false,
   tab: "today",
   productQuery: ""
 };
@@ -236,61 +224,187 @@ function renderProducts() {
   }).join("");
 }
 
-// ---------- rotation ----------
-function monthMatches(label) {
-  const m = String(label).match(/(\d{1,2})\s*월/);
-  return !!m && parseInt(m[1], 10) === new Date().getMonth() + 1;
+// ---------- rotation (shared plan; only admins edit) ----------
+function productLabel(p) { return (p.brand ? p.brand + " " : "") + p.name; }
+
+function slotHtml(slot) {
+  const prods = (slot.options || []).map(productById).filter(Boolean);
+  const choose = prods.length > 1;
+  const cards = prods.length
+    ? prods.map((p) => `<a class="opt" href="${esc(safeIherbUrl(p.url, productLabel(p)))}" target="_blank" rel="noopener">
+        ${thumbHtml(p.name, isSafePhoto(p.photo) ? p.photo : null, "opt-photo")}
+        <span class="opt-text">${p.brand ? `<span class="opt-brand">${esc(p.brand)}</span>` : ""}<span class="opt-name">${esc(p.name)}</span></span>
+      </a>`).join("")
+    : `<span class="opt-missing">연결된 제품이 없어요${isAdmin() ? " — 로테이션 편집에서 골라주세요" : ""}</span>`;
+  return `<div class="slot">
+    <div class="slot-head"><span class="slot-label">${esc(slot.label)}</span>${choose ? `<span class="chip pick">${prods.length}개 중 택1</span>` : ""}<span class="slot-amount">${esc(slot.amount || "")}</span></div>
+    <div class="opts${choose ? " scroll" : ""}">${cards}</div>
+  </div>`;
+}
+
+function monthCard(info, when, full) {
+  const plan = state.plan;
+  if (info.before) {
+    return `<div class="month-card${full ? " now" : ""}"><div class="mc-when">${when} · ${info.month}월</div>
+      <p class="mc-note">${info.monthsUntilStart}개월 뒤, ${plan.startYear}년 ${plan.startMonth}월에 시작해요.</p></div>`;
+  }
+  const m = info.method;
+  const head = `<div class="mc-when">${when} · ${info.month}월 <span class="chip code">${esc(info.code)}</span></div>
+    <div class="mc-title">${esc(m.title)}${m.subtitle ? ` <span class="mc-sub">${esc(m.subtitle)}</span>` : ""}</div>`;
+  if (!full) {
+    const names = (slots) => slots.map((s) => esc(s.label)).join(", ");
+    return `<div class="month-card">${head}<p class="mc-note">점심: ${names(m.lunch)}<br>저녁: ${names(m.dinner)}</p></div>`;
+  }
+  return `<div class="month-card now">${head}
+    <div class="meal"><div class="meal-head">점심 먹고</div>${m.lunch.map(slotHtml).join("")}</div>
+    <div class="meal"><div class="meal-head">저녁 먹고</div>${m.dinner.map(slotHtml).join("")}</div>
+  </div>`;
 }
 
 function renderRotation() {
-  const r = state.rotation;
-  const body = $("#rotBody");
-  $("#rotExample").hidden = !(r && !r.rows.length && !r.notes);
-  if (!r) { body.innerHTML = ""; return; }
-  // Rebuilding the rows while someone is typing in them would drop focus and the cursor.
-  if (!body.contains(document.activeElement)) body.innerHTML = r.rows.map((row) => `<tr class="${monthMatches(row.month) ? "current-month" : ""}">
-    <td><input class="cell-input month-input" data-field="month" data-row="${esc(row.id)}" value="${esc(row.month)}" aria-label="월"></td>
-    <td><input class="cell-input code-input" data-field="code" data-row="${esc(row.id)}" value="${esc(row.code)}" aria-label="코드"></td>
-    <td><input class="cell-input" list="productNames" data-field="lunch" data-row="${esc(row.id)}" value="${esc(row.lunch)}" placeholder="점심에 먹을 것" aria-label="점심"></td>
-    <td><input class="cell-input" list="productNames" data-field="dinner" data-row="${esc(row.id)}" value="${esc(row.dinner)}" placeholder="저녁에 먹을 것" aria-label="저녁"></td>
-    <td><button class="rot-del" data-del-row="${esc(row.id)}" aria-label="줄 삭제">✕</button></td>
-  </tr>`).join("");
-  const notes = $("#rotNotes");
-  if (document.activeElement !== notes) notes.value = r.notes || "";
-  const names = new Set([...state.products.map((p) => p.name), ...state.items.map((i) => i.name)]);
-  $("#productNames").innerHTML = [...names].map((n) => `<option value="${esc(n)}">`).join("");
-  renderRotationSummary();
+  const plan = state.plan;
+  const admin = isAdmin();
+  $("#rotEdit").hidden = !(admin && plan);
+  $("#rotEmpty").hidden = !!plan || !state.planLoaded;
+  $("#rotCreate").hidden = !(admin && !plan);
+  $("#rotEmptyText").textContent = admin
+    ? "아직 유산균 로테이션이 없어요. 캡처하신 3사이클 규칙과 제품 목록으로 바로 만들 수 있어요."
+    : "관리자가 아직 유산균 로테이션을 만들지 않았어요.";
+  $("#rotContent").hidden = !plan;
+  if (!plan) return;
+  const now = new Date();
+  const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  $("#rotNow").innerHTML = monthCard(planForMonth(plan, now.getFullYear(), now.getMonth() + 1), "이번 달", true);
+  $("#rotNext").innerHTML = monthCard(planForMonth(plan, nextMonth.getFullYear(), nextMonth.getMonth() + 1), "다음 달", false);
+  $("#rotYear").innerHTML = upcomingMonths(plan, now, 12).map((x, i) => `<li class="${i === 0 ? "on" : ""}">
+    <span class="ry-month">${x.month === 1 || i === 0 ? x.year + "년 " : ""}${x.month}월</span>
+    ${x.before ? `<span class="ry-title muted">시작 전</span>` : `<span class="chip code">${esc(x.code)}</span><span class="ry-title">${esc(x.method.title)}${x.method.subtitle ? " · " + esc(x.method.subtitle) : ""}</span>`}
+  </li>`).join("");
 }
 
-function renderRotationSummary() {
-  const cur = state.rotation && state.rotation.rows.find((row) => monthMatches(row.month));
-  $("#rotNow").innerHTML = cur
-    ? `<strong>이번 달 (${esc(cur.month)}${cur.code ? " · " + esc(cur.code) : ""})</strong>
-       <div>점심: ${esc(cur.lunch) || "<em>아직 안 채웠어요</em>"}</div>
-       <div>저녁: ${esc(cur.dinner) || "<em>아직 안 채웠어요</em>"}</div>`
-    : `<strong>이번 달 줄이 없어요.</strong> <span>아래 "+ 이번 달 줄 추가"를 눌러주세요.</span>`;
+// The editor works on a copy so nothing changes for anyone until "저장".
+let draftPlan = null;
+
+function openRotationEditor() {
+  draftPlan = JSON.parse(JSON.stringify(state.plan || defaultPlan()));
+  openSheet("유산균 로테이션 편집", `<div id="planEditor"></div>`);
+  renderRotationEditor();
 }
 
-// Local edits win over server snapshots until they are saved, otherwise the
-// confirmation of an earlier save would overwrite text typed since then.
-let rotationTimer;
-let rotationEdits = 0;
-let rotationSaved = 0;
-function markRotationEdited() { rotationEdits++; }
-function saveRotationSoon() {
-  markRotationEdited();
-  clearTimeout(rotationTimer);
-  rotationTimer = setTimeout(saveRotation, 600);
+function renderRotationEditor() {
+  const box = $("#planEditor");
+  if (!box) return;
+  const sheet = $(".sheet");
+  const scroll = sheet.scrollTop;
+  const catalog = [...state.products].sort((a, b) => productLabel(a).localeCompare(productLabel(b), "ko"));
+  const optionList = catalog.map((p) => `<option value="${esc(p.id)}">${esc(productLabel(p))}</option>`).join("");
+  const start = `${draftPlan.startYear}-${pad2(draftPlan.startMonth)}`;
+  const slotEditor = (slot, mi, meal, si) => `<div class="ps" data-m="${mi}" data-meal="${meal}" data-s="${si}">
+      <div class="ps-row">
+        <input data-ps="label" value="${esc(slot.label)}" placeholder="칸 이름 (예: 발효효소)" aria-label="칸 이름">
+        <input data-ps="amount" class="ps-amount" value="${esc(slot.amount || "")}" placeholder="1캡슐" aria-label="양">
+        <button type="button" class="rot-del" data-ps-del aria-label="칸 삭제">✕</button>
+      </div>
+      <div class="ps-opts">${(slot.options || []).map((id) => {
+        const p = productById(id);
+        return `<span class="ps-chip${p ? "" : " gone"}">${esc(p ? productLabel(p) : "삭제된 제품")}<button type="button" data-opt-del="${esc(id)}" aria-label="빼기">✕</button></span>`;
+      }).join("")}</div>
+      <select data-opt-add aria-label="제품 추가"><option value="">+ 제품 추가${(slot.options || []).length ? " (2개 이상이면 택1)" : ""}</option>${optionList}</select>
+    </div>`;
+  box.innerHTML = `<form id="planForm">
+    <div class="field"><label for="planStart">시작 월 — 이 달이 섭취법 1, 1사이클(1-1)이에요</label>
+      <input type="month" id="planStart" value="${start}" required></div>
+    ${draftPlan.methods.map((m, mi) => `<section class="pm" data-m="${mi}">
+      <div class="pm-head"><span class="chip code">${mi + 1}</span>
+        <input data-pm="title" value="${esc(m.title)}" placeholder="섭취법 ${mi + 1}" aria-label="섭취법 이름">
+        <input data-pm="subtitle" value="${esc(m.subtitle || "")}" placeholder="설명 (예: 가든 유산균)" aria-label="설명"></div>
+      ${["lunch", "dinner"].map((meal) => `<div class="pm-meal"><div class="meal-head">${meal === "lunch" ? "점심 먹고" : "저녁 먹고"}</div>
+        ${m[meal].map((slot, si) => slotEditor(slot, mi, meal, si)).join("")}
+        <button type="button" class="btn-small" data-slot-add="${meal}" data-m="${mi}">+ 칸 추가</button></div>`).join("")}
+      ${draftPlan.methods.length > 1 ? `<button type="button" class="btn-danger-text" data-method-del="${mi}">섭취법 ${mi + 1} 삭제</button>` : ""}
+    </section>`).join("")}
+    <button type="button" class="rot-add" data-method-add>+ 섭취법 추가</button>
+    <div class="sheet-actions"><button type="button" class="btn-secondary" data-close-sheet>취소</button>
+      <button type="submit" class="btn-primary">저장 — 모든 사용자에게 적용</button></div>
+  </form>`;
+  sheet.scrollTop = scroll;
 }
-async function saveRotation() {
-  clearTimeout(rotationTimer);
-  rotationTimer = null;
-  const version = rotationEdits;
-  try {
-    await setDoc(doc(db, "users", state.user.uid, "meta", "rotation"), {
-      rows: state.rotation.rows, notes: state.rotation.notes, updatedAt: serverTimestamp()
+
+function editorTarget(el) {
+  const ps = el.closest(".ps");
+  const mi = parseInt((ps || el.closest("[data-m]")).dataset.m, 10);
+  const method = draftPlan.methods[mi];
+  const slot = ps ? method[ps.dataset.meal][parseInt(ps.dataset.s, 10)] : null;
+  return { mi, method, ps, slot };
+}
+
+function handleEditorClick(e) {
+  if (!draftPlan || !e.target.closest("#planEditor")) return false;
+  const t = e.target.closest("[data-ps-del],[data-opt-del],[data-slot-add],[data-method-del],[data-method-add]");
+  if (!t) return false;
+  if ("methodAdd" in t.dataset) {
+    const n = draftPlan.methods.length + 1;
+    draftPlan.methods.push({ id: "m" + Date.now().toString(36), title: "섭취법 " + n, subtitle: "", lunch: [], dinner: [] });
+  } else if (t.dataset.methodDel) {
+    if (!confirm("이 섭취법을 삭제할까요? 저장하기 전까지는 적용되지 않아요.")) return true;
+    draftPlan.methods.splice(parseInt(t.dataset.methodDel, 10), 1);
+  } else if (t.dataset.slotAdd) {
+    const { method } = editorTarget(t);
+    method[t.dataset.slotAdd].push({ label: "", options: [], amount: "1캡슐" });
+  } else {
+    const { method, ps, slot } = editorTarget(t);
+    if ("psDel" in t.dataset) method[ps.dataset.meal].splice(parseInt(ps.dataset.s, 10), 1);
+    else if (t.dataset.optDel) slot.options = slot.options.filter((id) => id !== t.dataset.optDel);
+  }
+  renderRotationEditor();
+  return true;
+}
+
+function handleEditorChange(t) {
+  if (!draftPlan || !t.closest("#planEditor")) return false;
+  if (t.id === "planStart") {
+    const [y, m] = (t.value || "").split("-").map(Number);
+    if (y && m) { draftPlan.startYear = y; draftPlan.startMonth = m; }
+    return true;
+  }
+  if (t.matches("[data-opt-add]") && t.value) {
+    const { slot } = editorTarget(t);
+    if (!slot.options.includes(t.value)) slot.options.push(t.value);
+    renderRotationEditor();
+    return true;
+  }
+  return false;
+}
+
+function handleEditorInput(t) {
+  if (!draftPlan || !t.closest("#planEditor")) return false;
+  if (t.dataset.pm) { editorTarget(t).method[t.dataset.pm] = t.value; return true; }
+  if (t.dataset.ps) { editorTarget(t).slot[t.dataset.ps] = t.value; return true; }
+  return false;
+}
+
+async function savePlan() {
+  const plan = draftPlan;
+  plan.methods.forEach((m) => {
+    m.title = (m.title || "").trim() || "섭취법";
+    ["lunch", "dinner"].forEach((meal) => {
+      m[meal] = m[meal].filter((s) => (s.label || "").trim() || s.options.length)
+        .map((s) => ({ label: (s.label || "").trim() || "이름 없음", options: s.options, amount: (s.amount || "").trim() }));
     });
-    rotationSaved = Math.max(rotationSaved, version);
+  });
+  if (!validPlan(plan)) { toast("시작 월과 섭취법을 확인해주세요."); return; }
+  try {
+    await setDoc(doc(db, "config", "rotation"), { ...plan, updatedAt: serverTimestamp(), updatedBy: state.user.uid });
+    draftPlan = null;
+    closeSheet();
+    toast("유산균 로테이션을 저장했어요. 모든 사용자에게 바로 적용돼요.");
+  } catch (e) { fail(e); }
+}
+
+async function createDefaultPlan() {
+  try {
+    await setDoc(doc(db, "config", "rotation"), { ...defaultPlan(), updatedAt: serverTimestamp(), updatedBy: state.user.uid });
+    toast("캡처한 규칙으로 로테이션을 만들었어요. 이번 달이 섭취법 1이에요.");
   } catch (e) { fail(e); }
 }
 
@@ -335,6 +449,7 @@ function openSheet(title, html) {
   document.body.classList.add("sheet-open");
 }
 function closeSheet() {
+  draftPlan = null;
   $("#scrim").hidden = true;
   $("#sheetBody").innerHTML = "";
   document.body.classList.remove("sheet-open");
@@ -624,10 +739,9 @@ function subscribe(uid) {
     state.logs = logs;
     renderAll();
   }, fail));
-  unsubs.push(onSnapshot(doc(db, "users", uid, "meta", "rotation"), (s) => {
-    if (state.rotation && (s.metadata.hasPendingWrites || rotationEdits !== rotationSaved)) return;
-    const d = s.exists() ? s.data() : null;
-    state.rotation = { rows: Array.isArray(d?.rows) ? d.rows : [], notes: typeof d?.notes === "string" ? d.notes : "" };
+  unsubs.push(onSnapshot(doc(db, "config", "rotation"), (s) => {
+    state.plan = s.exists() && validPlan(s.data()) ? s.data() : null;
+    state.planLoaded = true;
     renderRotation();
   }, fail));
 }
@@ -674,7 +788,8 @@ function wire() {
   });
 
   document.addEventListener("click", (e) => {
-    const t = e.target.closest("[data-take],[data-skip],[data-undo],[data-edit-item],[data-adopt],[data-edit-product],[data-close-sheet],[data-delete-item],[data-delete-product],[data-photo-clear],[data-import-remove],[data-del-row],.day-chip,#importParse,#importSave,#rotAddRow,#rotExample");
+    if (handleEditorClick(e)) return;
+    const t = e.target.closest("[data-take],[data-skip],[data-undo],[data-edit-item],[data-adopt],[data-edit-product],[data-close-sheet],[data-delete-item],[data-delete-product],[data-photo-clear],[data-import-remove],.day-chip,#importParse,#importSave,#rotEdit,#rotCreate");
     if (!t) return;
     if (t.dataset.take) setStatus(t.dataset.take, "TAKEN");
     else if (t.dataset.skip) setStatus(t.dataset.skip, "SKIPPED");
@@ -696,37 +811,25 @@ function wire() {
     } else if (t.dataset.importRemove) {
       importRows.splice(parseInt(t.dataset.importRemove, 10), 1);
       renderImportRows();
-    } else if (t.dataset.delRow) {
-      state.rotation.rows = state.rotation.rows.filter((r) => r.id !== t.dataset.delRow);
-      markRotationEdited();
-      renderRotation();
-      saveRotation();
     } else if (t.classList.contains("day-chip")) {
       t.classList.toggle("on");
       t.setAttribute("aria-pressed", t.classList.contains("on"));
     } else if (t.id === "importParse") parseImport();
     else if (t.id === "importSave") saveImport();
-    else if (t.id === "rotAddRow") {
-      state.rotation.rows.push({ id: "r" + Date.now().toString(36), month: (new Date().getMonth() + 1) + "월", code: "", lunch: "", dinner: "" });
-      markRotationEdited();
-      renderRotation();
-      saveRotation();
-    } else if (t.id === "rotExample") {
-      state.rotation = JSON.parse(JSON.stringify(ROTATION_EXAMPLE));
-      markRotationEdited();
-      renderRotation();
-      saveRotation();
-    }
+    else if (t.id === "rotEdit") openRotationEditor();
+    else if (t.id === "rotCreate") createDefaultPlan();
   });
 
   document.addEventListener("submit", (e) => {
     e.preventDefault();
     if (e.target.id === "itemForm") saveItemForm(e.target);
     else if (e.target.id === "productForm") saveProductForm(e.target);
+    else if (e.target.id === "planForm") savePlan();
   });
 
   document.addEventListener("change", (e) => {
     const t = e.target;
+    if (handleEditorChange(t)) return;
     if (t.matches("[data-photo-input]")) {
       handlePhotoInput(t, (data) => {
         sheetPhoto = data;
@@ -740,27 +843,17 @@ function wire() {
 
   document.addEventListener("input", (e) => {
     const t = e.target;
+    if (handleEditorInput(t)) return;
     if (t.id === "fName") $("#fNameIherb").href = iherbSearchUrl(t.value);
     else if (t.dataset.imp) {
       const row = importRows[parseInt(t.closest(".import-row").dataset.index, 10)];
       row[t.dataset.imp] = t.dataset.imp === "count" ? (parseInt(t.value, 10) || null) : t.value;
       if (t.dataset.imp === "name") t.classList.toggle("need", !!row.needsName && !t.value.trim());
-    } else if (t.dataset.row && state.rotation) {
-      const row = state.rotation.rows.find((r) => r.id === t.dataset.row);
-      if (!row) return;
-      row[t.dataset.field] = t.value;
-      if (t.dataset.field === "month") t.closest("tr").className = monthMatches(row.month) ? "current-month" : "";
-      renderRotationSummary();
-      saveRotationSoon();
-    } else if (t.id === "rotNotes" && state.rotation) {
-      state.rotation.notes = t.value;
-      saveRotationSoon();
     }
   });
 
   $("#scrim").addEventListener("click", (e) => { if (e.target.id === "scrim") closeSheet(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#scrim").hidden) closeSheet(); });
-  window.addEventListener("pagehide", () => { if (rotationTimer) saveRotation(); });
 }
 
 // ---------- boot ----------
@@ -774,8 +867,7 @@ function boot() {
     unsubscribeAll();
     state.user = user;
     state.adminUids = null;
-    state.products = []; state.items = []; state.logs = {}; state.rotation = null;
-    rotationEdits = 0; rotationSaved = 0;
+    state.products = []; state.items = []; state.logs = {}; state.plan = null; state.planLoaded = false;
     if (!user) { closeSheet(); showScreen("screenLogin"); return; }
     showScreen("screenApp");
     switchTab(state.tab);

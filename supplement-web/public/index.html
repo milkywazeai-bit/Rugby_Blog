@@ -84,20 +84,19 @@
       </section>
 
       <section class="panel" data-panel="rotation" hidden>
-        <div id="rotNow" class="rot-now"></div>
-        <p class="hint">달마다 어떤 유산균 조합을 먹을지 적는 표예요. 이번 달 줄은 초록색으로 표시돼요. 칸을 누르면 제품 목록에서 골라 넣을 수 있어요.</p>
-        <button id="rotExample" class="rot-add" type="button" hidden>캡처한 유산균 3 사이클 예시로 채우기</button>
-        <div class="rot-table-wrap">
-          <table class="rot-table">
-            <thead><tr><th>월</th><th>코드</th><th>점심</th><th>저녁</th><th><span class="sr-only">삭제</span></th></tr></thead>
-            <tbody id="rotBody"></tbody>
-          </table>
+        <div class="rot-top">
+          <p class="hint">유산균은 한 가지만 계속 먹지 않고, 달마다 정해진 순서로 조합을 바꿔 먹어요. 이번 달에 먹을 제품을 확인하세요.</p>
+          <button id="rotEdit" class="btn-small" type="button" hidden>로테이션 편집</button>
         </div>
-        <datalist id="productNames"></datalist>
-        <button id="rotAddRow" class="rot-add" type="button">+ 이번 달 줄 추가</button>
-        <div class="rot-notes">
-          <label for="rotNotes">사이클 규칙 메모</label>
-          <textarea id="rotNotes" spellcheck="false" placeholder="섭취 규칙이나 메모를 자유롭게 적어두세요."></textarea>
+        <div id="rotEmpty" class="empty" hidden>
+          <span id="rotEmptyText"></span>
+          <button id="rotCreate" class="btn-primary" type="button" hidden>캡처한 3사이클 규칙으로 만들기</button>
+        </div>
+        <div id="rotContent" hidden>
+          <div id="rotNow"></div>
+          <div id="rotNext"></div>
+          <h3 class="sub-head">앞으로 12개월 순서</h3>
+          <ol id="rotYear" class="rot-year"></ol>
         </div>
       </section>
 

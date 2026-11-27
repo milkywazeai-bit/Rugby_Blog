@@ -20,11 +20,6 @@ export function initFirebase() {
   const config = useEmulator
     ? { apiKey: "demo-key", authDomain: "localhost", projectId: "demo-supplement", appId: "demo" }
     : { ...firebaseConfig };
-  // Serving auth from the same domain as the app avoids the cross-site storage
-  // partitioning that breaks Google sign-in on mobile Safari/Chrome.
-  if (!useEmulator && /\.(web\.app|firebaseapp\.com)$/.test(location.hostname)) {
-    config.authDomain = location.hostname;
-  }
   app = initializeApp(config);
   auth = getAuth(app);
   auth.languageCode = "ko";

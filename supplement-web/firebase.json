@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "site": "supplement-scheduler-kr",
     "public": "public",
     "ignore": ["firebase.json", "**/.*"],
     "headers": [

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  dayEntries, dailyUseAll, daysLeft, productsInUse, sectionOf, historyGroups, weekStart, monthKey, isoDow, MEAL_MINUTES, autoTakeList
+  dayEntries, dailyUseAll, daysLeft, productsInUse, historyGroups, weekStart, monthKey, isoDow, DEFAULT_MEAL_TIMES, autoTakeList, mealTimes, extraMeal
 } from "../src/schedule.js";
 
 const DAY = 20784; // 2026-11-27, a Friday
@@ -26,11 +26,11 @@ test("Friday is weekday 5", () => {
   assert.equal(isoDow(DAY), 5);
 });
 
-test("today's list: cycle + base at meals, extras at their time, only on scheduled days", () => {
+test("today's list by meal: cycle, base set, extras, only on scheduled days", () => {
   const entries = dayEntries({ cycle, extras, day: DAY });
-  assert.deepEqual(entries.map((e) => e.key), ["ex-e1", "base-lunch-tri", "cy-lunch-gol", "base-dinner-tri", "base-dinner-vit"]);
+  assert.deepEqual(entries.map((e) => e.key), ["ex-e1", "cy-lunch-gol", "base-lunch-tri", "base-dinner-tri", "base-dinner-vit"]);
   assert.equal(entries.find((e) => e.key === "ex-e1").amount, 2);
-  assert.equal(entries.find((e) => e.key === "cy-lunch-gol").minutes, MEAL_MINUTES.lunch);
+  assert.equal(entries.find((e) => e.key === "cy-lunch-gol").minutes, DEFAULT_MEAL_TIMES.lunch);
 });
 
 test("nothing from the cycle before it starts", () => {
@@ -43,11 +43,12 @@ test("magnesium only on Mon/Wed", () => {
   assert.ok(dayEntries({ cycle: null, extras, day: monday }).some((e) => e.key === "ex-e2"));
 });
 
-test("sections: morning / lunch / evening / night", () => {
-  assert.equal(sectionOf(8 * 60), "morning");
-  assert.equal(sectionOf(MEAL_MINUTES.lunch), "lunch");
-  assert.equal(sectionOf(MEAL_MINUTES.dinner), "evening");
-  assert.equal(sectionOf(22 * 60), "night");
+test("old extras with a clock time map to a meal", () => {
+  assert.equal(extraMeal({ timeMinutes: 8 * 60 }), "morning");
+  assert.equal(extraMeal({ timeMinutes: 13 * 60 }), "lunch");
+  assert.equal(extraMeal({ timeMinutes: 22 * 60 }), "dinner");
+  assert.equal(extraMeal({ meal: "dinner", timeMinutes: 8 * 60 }), "dinner");
+  assert.equal(extraMeal({}), "morning");
 });
 
 test("daily use adds cycle, base (both meals) and extras averaged over the week", () => {
@@ -101,4 +102,21 @@ test("autoTakeList fills only doses with no log, across days", () => {
 
 test("autoTakeList returns nothing for an empty range", () => {
   assert.deepEqual(autoTakeList({ cycle: null, extras: [], fromDay: DAY, toDay: DAY - 1, logged: new Set() }), []);
+});
+
+test("each person's meal times order and time the doses", () => {
+  const times = mealTimes({ mealTimes: { morning: 7 * 60, lunch: 12 * 60, dinner: 18 * 60 + 30 } });
+  const extras = [
+    { id: "a", productId: "pa", meal: "dinner", days: [1, 2, 3, 4, 5, 6, 7] },
+    { id: "b", productId: "pb", meal: "morning", days: [1, 2, 3, 4, 5, 6, 7] }
+  ];
+  const cycle = { startDay: DAY, items: [{ meal: "lunch", productId: "pc", amount: "1캡슐" }] };
+  const list = dayEntries({ cycle, extras, day: DAY, times });
+  assert.deepEqual(list.map((e) => e.meal), ["morning", "lunch", "dinner"]);
+  assert.deepEqual(list.map((e) => e.minutes), [7 * 60, 12 * 60, 18 * 60 + 30]);
+});
+
+test("mealTimes falls back to defaults for missing or bad values", () => {
+  assert.deepEqual(mealTimes(null), DEFAULT_MEAL_TIMES);
+  assert.deepEqual(mealTimes({ mealTimes: { morning: -5, lunch: "x", dinner: 1200 } }), { ...DEFAULT_MEAL_TIMES, dinner: 1200 });
 });

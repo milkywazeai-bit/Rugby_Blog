@@ -327,3 +327,13 @@ button.item-body{cursor:pointer}
 .auto-toggle.on .auto-state{color:var(--accent);font-weight:600}
 .auto-points{margin:12px 0 4px;padding-left:18px;font-size:.86rem;line-height:1.6;color:var(--ink)}
 .auto-points li{margin-bottom:4px}
+
+/* meals */
+.section-head .time{font-family:var(--font-mono);font-size:.72rem;color:var(--ink-muted)}
+.meal-pick{display:flex;gap:8px}
+.meal-chip{flex:1;padding:11px 0;border-radius:var(--radius-pill);border:1px solid var(--border);background:var(--surface);font-weight:600;color:var(--ink-muted)}
+.meal-chip.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.chip.meal{background:var(--surface-2);color:var(--ink)}
+.meal-times{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.mt-row{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2);font-weight:600}
+.mt-row input{font:inherit;font-family:var(--font-mono);border:1px solid var(--border);border-radius:10px;padding:6px 10px;background:var(--surface);color:var(--ink)}

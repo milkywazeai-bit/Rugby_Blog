@@ -2,16 +2,35 @@
 // Pure functions so they can be tested without Firebase or a browser.
 import { perDose } from "./rotation.js";
 
-export const MEAL_MINUTES = { lunch: 12 * 60 + 30, dinner: 19 * 60 };
-export const SECTIONS = [
-  { key: "morning", label: "아침", until: 11 * 60 },
-  { key: "lunch", label: "점심", until: 17 * 60 },
-  { key: "evening", label: "저녁", until: 21 * 60 },
-  { key: "night", label: "밤", until: 24 * 60 }
+// Everything is taken with a meal: 아침, 점심 or 저녁. Each person sets the clock
+// time of their meals (내 정보 → 복용 시간), used for ordering and reminders.
+export const MEALS = [
+  { key: "morning", label: "아침" },
+  { key: "lunch", label: "점심" },
+  { key: "dinner", label: "저녁" }
 ];
+export const DEFAULT_MEAL_TIMES = { morning: 8 * 60, lunch: 12 * 60 + 30, dinner: 19 * 60 };
+const MEAL_KEYS = MEALS.map((m) => m.key);
 
-export function sectionOf(minutes) {
-  return SECTIONS.find((s) => minutes < s.until).key;
+export function mealTimes(settings) {
+  const t = (settings && settings.mealTimes) || {};
+  const out = {};
+  for (const k of MEAL_KEYS) out[k] = Number.isInteger(t[k]) && t[k] >= 0 && t[k] < 1440 ? t[k] : DEFAULT_MEAL_TIMES[k];
+  return out;
+}
+
+export function mealLabel(key) {
+  const m = MEALS.find((x) => x.key === key);
+  return m ? m.label : "";
+}
+
+// Extras saved before meals existed have a clock time instead: map it to a meal.
+export function extraMeal(item) {
+  if (MEAL_KEYS.includes(item.meal)) return item.meal;
+  const m = typeof item.timeMinutes === "number" ? item.timeMinutes : 8 * 60;
+  if (m < 11 * 60) return "morning";
+  if (m < 16 * 60) return "lunch";
+  return "dinner";
 }
 
 export function isoDow(day) {
@@ -25,7 +44,9 @@ export function extraAmount(item) {
 
 // Everything to take on `day`: the running cycle, the base set (4번) and extra
 // supplements scheduled for that weekday. Each entry has a stable key per day.
-export function dayEntries({ cycle, extras, day }) {
+export function dayEntries({ cycle, extras, day, times = DEFAULT_MEAL_TIMES }) {
+  const at = (meal) => times[meal] ?? DEFAULT_MEAL_TIMES[meal] ?? DEFAULT_MEAL_TIMES.lunch;
+  const order = (meal) => Math.max(0, MEAL_KEYS.indexOf(meal));
   const out = new Map();
   const add = (e) => {
     const prev = out.get(e.key);
@@ -35,15 +56,17 @@ export function dayEntries({ cycle, extras, day }) {
   if (cycle && cycle.startDay <= day) {
     for (const it of cycle.items || []) {
       if (!it.productId) continue;
+      const meal = MEAL_KEYS.includes(it.meal) ? it.meal : "lunch";
       add({ key: `cy-${it.meal}-${it.productId}`, kind: "cycle", productId: it.productId, label: it.label,
-        amount: perDose(it.amount), minutes: MEAL_MINUTES[it.meal] ?? MEAL_MINUTES.lunch, meal: it.meal });
+        amount: perDose(it.amount), minutes: at(meal), meal });
     }
     const base = cycle.base;
     if (base && (base.startDay ?? cycle.startDay) <= day) {
       for (const it of base.items || []) {
         if (!it.productId) continue;
+        const meal = MEAL_KEYS.includes(it.meal) ? it.meal : "lunch";
         add({ key: `base-${it.meal}-${it.productId}`, kind: "base", productId: it.productId, label: it.label,
-          amount: perDose(it.amount), minutes: MEAL_MINUTES[it.meal] ?? MEAL_MINUTES.lunch, meal: it.meal });
+          amount: perDose(it.amount), minutes: at(meal), meal });
       }
     }
   }
@@ -51,10 +74,12 @@ export function dayEntries({ cycle, extras, day }) {
   for (const it of extras || []) {
     if (!Array.isArray(it.days) || !it.days.includes(dow)) continue;
     if (typeof it.createdDay === "number" && day < it.createdDay) continue;
+    const meal = extraMeal(it);
     add({ key: `ex-${it.id}`, kind: "extra", productId: it.productId || null, itemId: it.id, label: it.name || "",
-      amount: extraAmount(it), minutes: typeof it.timeMinutes === "number" ? it.timeMinutes : 8 * 60 });
+      amount: extraAmount(it), minutes: at(meal), meal });
   }
-  return [...out.values()].sort((a, b) => a.minutes - b.minutes || a.kind.localeCompare(b.kind));
+  const kindOrder = { cycle: 0, base: 1, extra: 2 };
+  return [...out.values()].sort((a, b) => order(a.meal) - order(b.meal) || kindOrder[a.kind] - kindOrder[b.kind]);
 }
 
 // Average units used per day for each product across cycle, base set and extras.
@@ -127,6 +152,7 @@ export function historyGroups(logs, by) {
 // (no log at all) count as taken. `logged` holds "day_key" ids that already
 // have a log, so a 건너뛰기 or an earlier 완료 is never touched.
 export function autoTakeList({ cycle, extras, fromDay, toDay, logged }) {
+  // Which meal a dose belongs to does not change what is taken, so default times are fine here.
   const out = [];
   for (let day = fromDay; day <= toDay; day++) {
     for (const e of dayEntries({ cycle, extras, day })) {

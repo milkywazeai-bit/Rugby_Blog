@@ -12,7 +12,7 @@ import {
   slotOptions, baseSlots, baseItemsFromPicks, defaultBasePicks
 } from "./rotation.js";
 import {
-  dayEntries, dailyUseAll, daysLeft, productsInUse, sectionOf, SECTIONS, historyGroups, extraAmount, autoTakeList
+  dayEntries, dailyUseAll, daysLeft, productsInUse, MEALS, mealTimes, mealLabel, extraMeal, historyGroups, extraAmount, autoTakeList
 } from "./schedule.js";
 
 const DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"];
@@ -115,7 +115,7 @@ function currentCycleTitle() {
 
 function todayEntries() {
   const day = epochDay();
-  return dayEntries({ cycle: state.cycle, extras: state.items, day })
+  return dayEntries({ cycle: state.cycle, extras: state.items, day, times: mealTimes(state.settings) })
     .map((e) => ({ ...e, status: state.logs[day + "_" + e.key] || "PENDING" }));
 }
 
@@ -160,12 +160,12 @@ function renderToday() {
   let html = pendingAll
     ? `<button type="button" class="btn-primary wide take-all" data-take-all>전체 복용 완료 <span>${pendingAll}개</span></button>`
     : `<div class="all-done">오늘 영양제를 다 챙겼어요 ✓</div>`;
-  for (const sec of SECTIONS) {
-    const g = list.filter((e) => sectionOf(e.minutes) === sec.key);
+  for (const sec of MEALS) {
+    const g = list.filter((e) => e.meal === sec.key);
     if (!g.length) continue;
     const done = g.filter((e) => e.status !== "PENDING").length;
     const secBtn = done < g.length ? `<button type="button" class="sec-take" data-take-section="${sec.key}">${sec.label} 모두 완료</button>` : "";
-    html += `<section class="section"><div class="section-head"><span class="label">${sec.label}</span><span class="count">${done}/${g.length}</span>${secBtn}</div>`;
+    html += `<section class="section"><div class="section-head"><span class="label">${sec.label}</span><span class="time">${fmtTime(g[0].minutes)}</span><span class="count">${done}/${g.length}</span>${secBtn}</div>`;
     for (const e of g) {
       const p = e.productId ? productById(e.productId) : null;
       const it = e.itemId ? state.items.find((x) => x.id === e.itemId) : null;
@@ -174,7 +174,7 @@ function renderToday() {
       const left = e.productId ? invCount(e.productId) : null;
       const dl = left === null ? null : daysLeft(Math.max(0, left), use[e.productId]);
       const tag = e.kind === "cycle" ? `사이클 ${code}` : KIND_TAG[e.kind];
-      const when = e.kind === "extra" ? fmtTime(e.minutes) : (e.meal === "dinner" ? "저녁 먹고" : "점심 먹고");
+      const when = `${mealLabel(e.meal)} 먹고`;
       const stock = left === null ? "" : `<span class="chip ${dl !== null && dl < 10 ? "low" : "stock"}">재고 ${Math.max(0, left)}</span>`;
       let actions;
       if (e.status === "TAKEN") actions = `<button class="chip taken" data-undo="${esc(e.key)}" title="되돌리기">완료 ✓</button>`;
@@ -236,7 +236,7 @@ function setStatus(key, status) { return setStatuses([key], status); }
 
 function takePending(sectionKey) {
   const keys = todayEntries()
-    .filter((e) => e.status === "PENDING" && (!sectionKey || sectionOf(e.minutes) === sectionKey))
+    .filter((e) => e.status === "PENDING" && (!sectionKey || e.meal === sectionKey))
     .map((e) => e.key);
   if (keys.length) setStatuses(keys, "TAKEN");
 }
@@ -1022,6 +1022,7 @@ async function saveStock(form) {
 function renderLowStock() {
   const list = inventoryRows().filter((r) => !r.ahead && r.days !== null && r.days < LOW_DAYS);
   $("#lowCount").textContent = list.length ? `${list.length}개` : "";
+  $("#lowCount").hidden = !list.length;
   $("#lowStock").innerHTML = list.length ? list.map((r) => {
     const p = productById(r.pid);
     const url = p ? safeIherbUrl(p.url, productLabel(p)) : iherbSearchUrl("");
@@ -1115,7 +1116,8 @@ function daysText(days) {
 
 function renderExtras() {
   const box = $("#extrasList");
-  const items = [...state.items].sort((a, b) => (a.timeMinutes || 0) - (b.timeMinutes || 0));
+  const order = (it) => MEALS.findIndex((m) => m.key === extraMeal(it));
+  const items = [...state.items].sort((a, b) => order(a) - order(b));
   if (!items.length) {
     box.innerHTML = `<div class="empty"><strong>아직 추가 영양제가 없어요.</strong><span>유산균 사이클 말고 따로 챙겨 먹는 영양제를 제품 목록에서 골라 추가하세요.</span></div>`;
     return;
@@ -1129,7 +1131,7 @@ function renderExtras() {
       <button class="item-body" data-edit-item="${esc(it.id)}">
         ${p && p.brand ? `<span class="opt-brand">${esc(p.brand)}</span>` : ""}
         <span class="item-name">${esc(name)}</span>
-        <span class="item-meta"><span>${fmtTime(it.timeMinutes || 0)}</span><span>${esc(daysText(it.days))}</span><span>${fmtNum(extraAmount(it))}${esc(unitOf(it.productId))}씩</span>${left === null ? "" : `<span class="chip stock">재고 ${Math.max(0, left)}</span>`}</span>
+        <span class="item-meta"><span class="chip meal">${mealLabel(extraMeal(it))}</span><span>${esc(daysText(it.days))}</span><span>${fmtNum(extraAmount(it))}${esc(unitOf(it.productId))}씩</span>${left === null ? "" : `<span class="chip stock">재고 ${Math.max(0, left)}</span>`}</span>
       </button>
       <button class="btn-small" data-edit-item="${esc(it.id)}">수정</button>
     </div>`;
@@ -1160,17 +1162,19 @@ function renderProductPicker(q) {
 function openItemSheet(itemId, fromProductId) {
   const it = itemId ? state.items.find((x) => x.id === itemId) : null;
   const prod = productById(fromProductId || (it && it.productId));
-  const base = it || { perDose: 1, timeMinutes: 8 * 60, days: [1, 2, 3, 4, 5, 6, 7], productId: prod ? prod.id : null };
+  const base = it || { perDose: 1, meal: "morning", days: [1, 2, 3, 4, 5, 6, 7], productId: prod ? prod.id : null };
+  const meal = extraMeal(base);
   const name = prod ? prod.name : (it && it.name) || "";
   const stock = prod ? (invCount(prod.id) ?? prod.count ?? 30) : "";
   openSheet(it ? "추가 영양제 수정" : "추가 영양제 등록", `
     <form id="itemForm" data-id="${esc(itemId || "")}" data-product="${esc(base.productId || "")}">
       ${prod ? `<div class="pick-head">${productRow(prod.id)}<a class="iherb-link" target="_blank" rel="noopener" href="${esc(safeIherbUrl(prod.url, productLabel(prod)))}">아이허브에서 보기 →</a></div>`
         : `<div class="field"><label for="fName">이름</label><input id="fName" required maxlength="80" value="${esc(name)}"></div>`}
-      <div class="row2">
-        <div class="field"><label for="fDose">한 번에</label><input id="fDose" type="number" min="0.5" step="0.5" inputmode="decimal" value="${esc(extraAmount(base))}"></div>
-        <div class="field"><label for="fTime">먹는 시간</label><input id="fTime" type="time" value="${fmtTime(base.timeMinutes ?? 480)}"></div>
+      <div class="field"><span class="label-like">언제 먹나요</span>
+        <div class="meal-pick" role="radiogroup" aria-label="먹는 때">${MEALS.map((m) => `<button type="button" class="meal-chip ${m.key === meal ? "on" : ""}" role="radio" data-meal="${m.key}" aria-checked="${m.key === meal}">${m.label}</button>`).join("")}</div>
+        <p class="hint">아침·점심·저녁 시간은 내 정보 → 복용 시간에서 바꿀 수 있어요.</p>
       </div>
+      <div class="field"><label for="fDose">한 번에 몇 개</label><input id="fDose" type="number" min="0.5" step="0.5" inputmode="decimal" value="${esc(extraAmount(base))}"></div>
       <div class="field"><span class="label-like">요일</span>
         <div class="days">${DAY_LABELS.map((l, i) => `<button type="button" class="day-chip ${base.days.includes(i + 1) ? "on" : ""}" data-day="${i + 1}" aria-pressed="${base.days.includes(i + 1)}">${l}</button>`).join("")}</div>
       </div>
@@ -1191,13 +1195,14 @@ async function saveItemForm(form) {
   if (!name) { if ($("#fName")) $("#fName").focus(); return; }
   const days = [...form.querySelectorAll(".day-chip.on")].map((b) => parseInt(b.dataset.day, 10));
   if (!days.length) { toast("요일을 하나 이상 골라주세요."); return; }
-  const [hh, mm] = ($("#fTime").value || "08:00").split(":").map(Number);
+  const picked = form.querySelector(".meal-chip.on");
+  const meal = picked ? picked.dataset.meal : "morning";
   const perDose = Math.max(0.5, parseFloat($("#fDose").value) || 1);
-  const data = { name, productId: pid, perDose, timeMinutes: (hh || 0) * 60 + (mm || 0), days };
+  const data = { name, productId: pid, perDose, meal, days };
   const uid = state.user.uid;
   try {
     const batch = writeBatch(db);
-    if (form.dataset.id) batch.update(doc(db, "users", uid, "items", form.dataset.id), data);
+    if (form.dataset.id) batch.update(doc(db, "users", uid, "items", form.dataset.id), { ...data, timeMinutes: deleteField() });
     else batch.set(doc(collection(db, "users", uid, "items")), { ...data, createdDay: epochDay(), createdAt: serverTimestamp() });
     const stockInput = $("#fStock");
     if (pid && stockInput && stockInput.value !== "") {
@@ -1220,9 +1225,44 @@ function renderMe() {
   $("#claimAdmin").hidden = !noAdmin;
   renderLowStock();
   if (state.tab === "me") renderHistory();
-  const notify = localStorage.getItem("notify") === "1" && "Notification" in window && Notification.permission === "granted";
-  $("#notifyBtn").textContent = notify ? "알림 끄기" : "알림 켜기";
-  $("#notifyState").textContent = notify ? "켜짐 — 이 앱이 열려 있는 동안 복용 시간에 알려드려요." : "꺼짐";
+  renderMealTimes();
+  renderNotify();
+}
+
+function renderMealTimes() {
+  const box = $("#mealTimes");
+  if (!box || box.contains(document.activeElement)) return;
+  const t = mealTimes(state.settings);
+  box.innerHTML = MEALS.map((m) => `<label class="mt-row"><span>${m.label}</span><input type="time" data-meal-time="${m.key}" value="${fmtTime(t[m.key])}" step="300"></label>`).join("");
+}
+
+async function saveMealTime(input) {
+  const [hh, mm] = (input.value || "").split(":").map(Number);
+  if (!Number.isInteger(hh) || !Number.isInteger(mm)) return;
+  const t = mealTimes(state.settings);
+  const was = t[input.dataset.mealTime];
+  t[input.dataset.mealTime] = hh * 60 + mm;
+  const keys = MEALS.map((m) => m.key);
+  for (let i = 1; i < keys.length; i++) {
+    if (t[keys[i]] <= t[keys[i - 1]]) { toast("아침 → 점심 → 저녁 순서로 시간을 정해주세요."); input.value = fmtTime(was); return; }
+  }
+  try {
+    await setDoc(settingsRef(), { mealTimes: t, updatedAt: serverTimestamp() }, { merge: true });
+    toast(`${mealLabel(input.dataset.mealTime)} 시간을 ${fmtTime(t[input.dataset.mealTime])}로 바꿨어요.`);
+  } catch (e) { fail(e); }
+}
+
+function notifyOn() {
+  return localStorage.getItem("notify") === "1" && "Notification" in window && Notification.permission === "granted";
+}
+
+function renderNotify() {
+  const on = notifyOn();
+  $("#notifyBtn").textContent = on ? "알림 끄기" : "알림 켜기";
+  const t = mealTimes(state.settings);
+  $("#notifyState").textContent = on
+    ? `켜짐 — 아침 ${fmtTime(t.morning)} · 점심 ${fmtTime(t.lunch)} · 저녁 ${fmtTime(t.dinner)}에 아직 안 먹은 게 있으면 알려드려요.`
+    : "꺼짐";
 }
 
 const TABS = ["today", "rotation", "extras", "inventory", "me", "products"];
@@ -1430,11 +1470,26 @@ function checkReminders() {
   const now = new Date();
   const mins = now.getHours() * 60 + now.getMinutes();
   const day = epochDay(now);
-  const due = todayEntries().filter((e) => e.status === "PENDING" && e.minutes === mins);
-  const fresh = due.filter((e) => !localStorage.getItem("notified_" + day + "_" + e.key));
-  if (!fresh.length) return;
-  fresh.forEach((e) => localStorage.setItem("notified_" + day + "_" + e.key, "1"));
-  try { new Notification("복용 시간이에요", { body: fresh.map(entryName).join(", "), icon: "icons/icon-192.png" }); } catch { /* some mobile browsers only allow SW notifications */ }
+  const t = mealTimes(state.settings);
+  for (const m of MEALS) {
+    // Due from the meal time until 30 minutes later, once per meal per day.
+    if (mins < t[m.key] || mins >= t[m.key] + 30) continue;
+    const flag = `notified_${day}_${m.key}`;
+    if (localStorage.getItem(flag)) continue;
+    const due = todayEntries().filter((e) => e.status === "PENDING" && e.meal === m.key);
+    if (!due.length) continue;
+    localStorage.setItem(flag, "1");
+    showReminder(`${m.label} 영양제 드실 시간이에요`, due.map(entryName).join(", "), `meal-${m.key}`);
+  }
+}
+
+async function showReminder(title, body, tag) {
+  const opts = { body, tag, icon: "icons/icon-192.png", badge: "icons/icon-192.png" };
+  try {
+    const reg = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : null;
+    if (reg) { await reg.showNotification(title, opts); return; }
+  } catch { /* fall back below */ }
+  try { new Notification(title, opts); } catch { /* some mobile browsers only allow SW notifications */ }
 }
 
 // ---------- data subscriptions ----------
@@ -1443,6 +1498,7 @@ function subscribe(uid) {
   unsubs.push(onSnapshot(doc(db, "users", uid, "meta", "settings"), (s) => {
     state.settings = s.exists() ? s.data() : {};
     renderAutoToggle();
+    renderAll();
     runAutoFill();
   }, fail));
   unsubs.push(onSnapshot(doc(db, "config", "admins"), (s) => {
@@ -1565,15 +1621,22 @@ function wire() {
       const perm = await Notification.requestPermission();
       localStorage.setItem("notify", perm === "granted" ? "1" : "0");
       if (perm !== "granted") toast("알림이 차단되어 있어요. 브라우저 설정에서 허용해주세요.");
+      else showReminder("알림이 켜졌어요", "아침·점심·저녁 복용 시간에 이렇게 알려드릴게요.", "notify-test");
     }
     renderMe();
   });
 
+  document.addEventListener("change", (e) => {
+    if (e.target.matches && e.target.matches("[data-meal-time]")) saveMealTime(e.target);
+  });
+
   document.addEventListener("click", (e) => {
     if (handleEditorClick(e) || handleSetupClick(e) || handleRestockClick(e)) return;
-    const t = e.target.closest("[data-take-all],[data-take-section],#autoToggle,#autoSet,[data-take],[data-skip],[data-undo],[data-edit-item],[data-adopt],[data-edit-product],[data-close-sheet],[data-delete-item],[data-delete-product],[data-photo-clear],[data-import-remove],.day-chip,#importParse,#importSave,#rotEdit,#rotStart,#cyStock,#cyNext,#cyReset,#cyConfirm,[data-restock],[data-goto],[data-pick-product],[data-inv-edit]");
+    const t = e.target.closest(".meal-chip,[data-take-all],[data-take-section],#autoToggle,#autoSet,[data-take],[data-skip],[data-undo],[data-edit-item],[data-adopt],[data-edit-product],[data-close-sheet],[data-delete-item],[data-delete-product],[data-photo-clear],[data-import-remove],.day-chip,#importParse,#importSave,#rotEdit,#rotStart,#cyStock,#cyNext,#cyReset,#cyConfirm,[data-restock],[data-goto],[data-pick-product],[data-inv-edit]");
     if (!t) return;
-    if ("takeAll" in t.dataset) takePending(null);
+    if (t.classList.contains("meal-chip")) {
+      t.parentElement.querySelectorAll(".meal-chip").forEach((b) => { b.classList.toggle("on", b === t); b.setAttribute("aria-checked", b === t); });
+    } else if ("takeAll" in t.dataset) takePending(null);
     else if (t.dataset.takeSection) takePending(t.dataset.takeSection);
     else if (t.id === "autoToggle") openAutoSheet();
     else if (t.id === "autoSet") setAutoMode(t.dataset.on === "1");

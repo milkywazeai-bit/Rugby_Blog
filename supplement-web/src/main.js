@@ -8,7 +8,8 @@ import {
 import { parseIherbLinks, findUnsupportedLinks, iherbSearchUrl, describeAmount, isIherbUrl } from "./iherb.js";
 import { compressPhoto, isSafePhoto } from "./photo.js";
 import {
-  defaultPlan, validPlan, methodIndexOf, nextCycle, dailyUse, remaining, cycleStatus, itemsFromPicks, defaultPicks
+  defaultPlan, validPlan, methodIndexOf, nextCycle, dailyUse, remaining, cycleStatus, itemsFromPicks, defaultPicks,
+  slotOptions
 } from "./rotation.js";
 
 const DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"];
@@ -245,17 +246,33 @@ function productRow(pid, right = "") {
     <span class="opt-text">${p && p.brand ? `<span class="opt-brand">${esc(p.brand)}</span>` : ""}<span class="opt-name">${esc(name)}</span></span>${right}</div>`;
 }
 
+// One option card: a single product, or a set of products taken together.
+function optionInner(ids) {
+  const prods = ids.map((id) => productById(id));
+  if (prods.length === 1) {
+    const p = prods[0];
+    const name = p ? p.name : "삭제된 제품";
+    return `${thumbHtml(name, p && isSafePhoto(p.photo) ? p.photo : null, "opt-photo")}
+      <span class="opt-text">${p && p.brand ? `<span class="opt-brand">${esc(p.brand)}</span>` : ""}<span class="opt-name">${esc(name)}</span></span>`;
+  }
+  return `<span class="set-photos">${prods.map((p) => thumbHtml(p ? p.name : "?", p && isSafePhoto(p.photo) ? p.photo : null, "opt-photo")).join("")}</span>
+    <span class="opt-text"><span class="opt-brand">${prods.length}개 세트</span>${prods.map((p) => `<span class="opt-name">${esc(p ? productLabel(p) : "삭제된 제품")}</span>`).join("")}</span>`;
+}
+
 function slotHtml(slot) {
-  const prods = (slot.options || []).map(productById).filter(Boolean);
-  const choose = prods.length > 1;
-  const cards = prods.length
-    ? prods.map((p) => `<a class="opt" href="${esc(safeIherbUrl(p.url, productLabel(p)))}" target="_blank" rel="noopener">
-        ${thumbHtml(p.name, isSafePhoto(p.photo) ? p.photo : null, "opt-photo")}
-        <span class="opt-text">${p.brand ? `<span class="opt-brand">${esc(p.brand)}</span>` : ""}<span class="opt-name">${esc(p.name)}</span></span>
-      </a>`).join("")
+  const opts = slotOptions(slot).filter((ids) => ids.some((id) => productById(id)));
+  const choose = opts.length > 1;
+  const cards = opts.length
+    ? opts.map((ids) => {
+        const p = productById(ids[0]);
+        const href = ids.length === 1 && p ? safeIherbUrl(p.url, productLabel(p)) : null;
+        return href
+          ? `<a class="opt" href="${esc(href)}" target="_blank" rel="noopener">${optionInner(ids)}</a>`
+          : `<div class="opt${ids.length > 1 ? " set" : ""}">${optionInner(ids)}</div>`;
+      }).join("")
     : `<span class="opt-missing">연결된 제품이 없어요${isAdmin() ? " — 사이클 구성 편집에서 골라주세요" : ""}</span>`;
   return `<div class="slot">
-    <div class="slot-head"><span class="slot-label">${esc(slot.label)}</span>${choose ? `<span class="chip pick">${prods.length}개 중 택1</span>` : ""}<span class="slot-amount">${esc(slot.amount || "")}</span></div>
+    <div class="slot-head"><span class="slot-label">${esc(slot.label)}</span>${choose ? `<span class="chip pick">${opts.length}개 중 택1</span>` : ""}<span class="slot-amount">${esc(slot.amount || "")}</span></div>
     <div class="opts${choose ? " scroll" : ""}">${cards}</div>
   </div>`;
 }
@@ -346,7 +363,7 @@ function renderCycleSetup(keepScroll = true) {
   if (setup.step === 1) {
     box.innerHTML = `<p class="hint">어떤 사이클로 시작할까요? 고른 사이클이 끝나면 다음 사이클로 순서대로 넘어가요.</p>` +
       plan.methods.map((m, i) => {
-        const ids = [...new Set([...m.lunch, ...m.dinner].flatMap((s) => s.options || []))].slice(0, 8);
+        const ids = [...new Set([...m.lunch, ...m.dinner].flatMap((s) => slotOptions(s).flat()))].slice(0, 8);
         return `<button type="button" class="cy-choice" data-cy-method="${i}">
           <span class="cy-choice-head"><span class="chip code">${i + 1}</span><strong>${esc(m.title)}</strong><span class="mc-sub">${esc(m.subtitle || "")}</span></span>
           <span class="cy-thumbs">${ids.map((id) => { const p = productById(id); return thumbHtml(p ? p.name : "?", p && isSafePhoto(p.photo) ? p.photo : null, "cy-thumb"); }).join("")}</span>
@@ -360,16 +377,13 @@ function renderCycleSetup(keepScroll = true) {
   const slotPicker = (slot, meal, i) => {
     const key = `${meal}:${i}`;
     const cur = setup.picks[key];
-    const opts = slot.options || [];
+    const opts = slotOptions(slot);
     const multi = opts.length > 1;
     const excluded = cur === null;
-    const optBtns = opts.map((id) => {
-      const p = productById(id);
-      const name = p ? p.name : "삭제된 제품";
-      return `<button type="button" class="opt pickable${cur === id ? " on" : ""}" data-cy-pick="${key}" data-pid="${esc(id)}"${p ? "" : " disabled"} aria-pressed="${cur === id}">
-        ${thumbHtml(name, p && isSafePhoto(p.photo) ? p.photo : null, "opt-photo")}
-        <span class="opt-text">${p && p.brand ? `<span class="opt-brand">${esc(p.brand)}</span>` : ""}<span class="opt-name">${esc(name)}</span></span>
-        <span class="tick" aria-hidden="true"></span></button>`;
+    const optBtns = opts.map((ids, oi) => {
+      const ok = ids.every((id) => productById(id));
+      return `<button type="button" class="opt pickable${ids.length > 1 ? " set" : ""}${cur === oi ? " on" : ""}" data-cy-pick="${key}" data-opt="${oi}"${ok ? "" : " disabled"} aria-pressed="${cur === oi}">
+        ${optionInner(ids)}<span class="tick" aria-hidden="true"></span></button>`;
     }).join("");
     return `<div class="slot cy-slot${excluded ? " excluded" : ""}${multi && cur === "" ? " need" : ""}" data-slot="${key}">
       <div class="slot-head"><span class="slot-label">${esc(slot.label)}</span>${multi && !excluded ? `<span class="chip pick">${opts.length}개 중 택1</span>` : ""}<span class="slot-amount">${esc(slot.amount || "")}</span>
@@ -409,14 +423,14 @@ function handleSetupClick(e) {
     setup.step = 1;
     renderCycleSetup(false);
   } else if (t.dataset.cyPick) {
-    setup.picks[t.dataset.cyPick] = t.dataset.pid;
+    setup.picks[t.dataset.cyPick] = parseInt(t.dataset.opt, 10);
     renderCycleSetup();
   } else if (t.dataset.cyExclude) {
     const key = t.dataset.cyExclude;
     if (setup.picks[key] === null) {
       const [meal, i] = key.split(":");
-      const opts = state.plan.methods[setup.methodIndex][meal][parseInt(i, 10)].options || [];
-      setup.picks[key] = opts.length === 1 ? opts[0] : "";
+      const opts = slotOptions(state.plan.methods[setup.methodIndex][meal][parseInt(i, 10)]);
+      setup.picks[key] = opts.length === 1 ? 0 : "";
     } else {
       setup.picks[key] = null;
     }
@@ -513,6 +527,9 @@ let draftPlan = null;
 
 function openRotationEditor() {
   draftPlan = JSON.parse(JSON.stringify(state.plan || defaultPlan()));
+  draftPlan.methods.forEach((m) => ["lunch", "dinner"].forEach((meal) => m[meal].forEach((slot) => {
+    slot.options = slotOptions(slot).map((ids) => ({ ids }));
+  })));
   openSheet("사이클 구성 편집", `<div id="planEditor"></div>`);
   renderRotationEditor();
 }
@@ -530,11 +547,15 @@ function renderRotationEditor() {
         <input data-ps="amount" class="ps-amount" value="${esc(slot.amount || "")}" placeholder="1캡슐" aria-label="양">
         <button type="button" class="rot-del" data-ps-del aria-label="칸 삭제">✕</button>
       </div>
-      <div class="ps-opts">${(slot.options || []).map((id) => {
-        const p = productById(id);
-        return `<span class="ps-chip${p ? "" : " gone"}">${esc(p ? productLabel(p) : "삭제된 제품")}<button type="button" data-opt-del="${esc(id)}" aria-label="빼기">✕</button></span>`;
-      }).join("")}</div>
-      <select data-opt-add aria-label="제품 추가"><option value="">+ 제품 추가${(slot.options || []).length ? " (2개 이상이면 택1)" : ""}</option>${optionList}</select>
+      ${slot.options.map((opt, oi) => `<div class="ps-option" data-o="${oi}">
+        <span class="ps-num">${slot.options.length > 1 ? "선택지 " + (oi + 1) : "제품"}</span>
+        <div class="ps-opts">${opt.ids.map((id) => {
+          const p = productById(id);
+          return `<span class="ps-chip${p ? "" : " gone"}">${esc(p ? productLabel(p) : "삭제된 제품")}<button type="button" data-opt-del="${esc(id)}" aria-label="빼기">✕</button></span>`;
+        }).join("")}
+        <select data-opt-join aria-label="같이 먹을 제품 추가"><option value="">+ 같이 먹을 제품 (세트로 묶기)</option>${optionList}</select></div>
+      </div>`).join("")}
+      <select data-opt-add aria-label="선택지 추가"><option value="">+ ${slot.options.length ? "다른 선택지 추가 (2개 이상이면 택1)" : "제품 추가"}</option>${optionList}</select>
     </div>`;
   box.innerHTML = `<form id="planForm">
     <p class="hint">모든 사용자가 사이클을 고를 때 보는 구성이에요. 첫 번째 점심 칸이 사이클의 주인공이라, 이 제품이 떨어지면 다음 사이클로 넘어가요. 이미 진행 중인 사이클은 그대로이고 다음 사이클부터 반영돼요.</p>
@@ -578,7 +599,11 @@ function handleEditorClick(e) {
   } else {
     const { method, ps, slot } = editorTarget(t);
     if ("psDel" in t.dataset) method[ps.dataset.meal].splice(parseInt(ps.dataset.s, 10), 1);
-    else if (t.dataset.optDel) slot.options = slot.options.filter((id) => id !== t.dataset.optDel);
+    else if (t.dataset.optDel) {
+      const opt = slot.options[parseInt(t.closest(".ps-option").dataset.o, 10)];
+      opt.ids = opt.ids.filter((id) => id !== t.dataset.optDel);
+      slot.options = slot.options.filter((o) => o.ids.length);
+    }
   }
   renderRotationEditor();
   return true;
@@ -588,7 +613,14 @@ function handleEditorChange(t) {
   if (!draftPlan || !t.closest("#planEditor")) return false;
   if (t.matches("[data-opt-add]") && t.value) {
     const { slot } = editorTarget(t);
-    if (!slot.options.includes(t.value)) slot.options.push(t.value);
+    slot.options.push({ ids: [t.value] });
+    renderRotationEditor();
+    return true;
+  }
+  if (t.matches("[data-opt-join]") && t.value) {
+    const { slot } = editorTarget(t);
+    const opt = slot.options[parseInt(t.closest(".ps-option").dataset.o, 10)];
+    if (!opt.ids.includes(t.value)) opt.ids.push(t.value);
     renderRotationEditor();
     return true;
   }
@@ -612,7 +644,7 @@ async function savePlan() {
     m.title = (m.title || "").trim() || "섭취법";
     ["lunch", "dinner"].forEach((meal) => {
       m[meal] = m[meal].filter((s) => (s.label || "").trim() || s.options.length)
-        .map((s) => ({ label: (s.label || "").trim() || "이름 없음", options: s.options, amount: (s.amount || "").trim() }));
+        .map((s) => ({ label: (s.label || "").trim() || "이름 없음", options: s.options.filter((o) => o.ids.length), amount: (s.amount || "").trim() }));
     });
   });
   if (!validPlan(plan)) { toast("사이클이 하나 이상 있어야 해요."); return; }

@@ -3,23 +3,38 @@
 // for "pick one" slots, may drop slots, and enters how many they have on hand.
 // A cycle lasts while its main product (the first lunch slot) lasts.
 
+// An option is one product or a set of products taken together: { ids: [...] }.
+// (Firestore can't nest arrays, hence the object.) Older plans stored bare ids.
+const one = (id) => ({ ids: [id] });
+const set = (...ids) => ({ ids });
 const ACV = "wish-01";
 const BUTYRATE = "wish-02";
 const ENZYMES = "wish-09";
-const VITC_ZINC = ["wish-20", "wish-03"];
-const GARDEN_OF_LIFE = ["wish-13", "wish-14", "wish-15", "wish-16", "wish-17", "wish-18"];
+const VITC_ZINC = [one("wish-20"), one("wish-03")];
+const GARDEN_OF_LIFE = ["wish-13", "wish-14", "wish-15", "wish-16", "wish-17", "wish-18"].map(one);
+const MULTI_STRAIN = ["wish-23", "wish-28", "wish-29", "wish-30", "wish-31", "wish-32"].map(one);
+const MUCOSA_SETS = [set("wish-33", "wish-34"), set("wish-36", "wish-35"), set("wish-38", "wish-37")];
+
+export function optionIds(opt) {
+  if (typeof opt === "string") return [opt];
+  return opt && Array.isArray(opt.ids) ? opt.ids : [];
+}
+
+export function slotOptions(slot) {
+  return (slot.options || []).map(optionIds).filter((ids) => ids.length);
+}
 
 function common(lunchFirst) {
   return {
     lunch: [
       ...lunchFirst,
-      { label: "발효효소", options: [ENZYMES], amount: "1캡슐" },
-      { label: "칼마부티르산", options: [BUTYRATE], amount: "1캡슐" },
-      { label: "애사비", options: [ACV], amount: "1캡슐" }
+      { label: "발효효소", options: [one(ENZYMES)], amount: "1캡슐" },
+      { label: "칼마부티르산", options: [one(BUTYRATE)], amount: "1캡슐" },
+      { label: "애사비", options: [one(ACV)], amount: "1캡슐" }
     ],
     dinner: [
-      { label: "칼마부티르산", options: [BUTYRATE], amount: "1캡슐" },
-      { label: "애사비", options: [ACV], amount: "1캡슐" },
+      { label: "칼마부티르산", options: [one(BUTYRATE)], amount: "1캡슐" },
+      { label: "애사비", options: [one(ACV)], amount: "1캡슐" },
       { label: "비타민C + 아연", options: VITC_ZINC, amount: "1캡슐" }
     ]
   };
@@ -32,12 +47,11 @@ export function defaultPlan() {
         { label: "가든 유산균", options: GARDEN_OF_LIFE, amount: "1캡슐" }
       ]) },
       { id: "m2", title: "섭취법 2", subtitle: "다균주 + 플로라", ...common([
-        { label: "다균주 제품", options: ["wish-23"], amount: "1캡슐" },
-        { label: "플로라파지", options: ["wish-07"], amount: "1캡슐" }
+        { label: "다균주 유산균", options: MULTI_STRAIN, amount: "1캡슐" },
+        { label: "플로라파지", options: [one("wish-07")], amount: "1캡슐" }
       ]) },
       { id: "m3", title: "섭취법 3", subtitle: "점막 개선", ...common([
-        { label: "점막개선 제품", options: ["wish-22"], amount: "1캡슐" },
-        { label: "폴리페놀 또는 NAG", options: ["wish-21"], amount: "1캡슐" }
+        { label: "점막 개선 세트", options: MUCOSA_SETS, amount: "각 1캡슐" }
       ]) }
     ]
   };
@@ -94,13 +108,17 @@ export function cycleStatus(cycle, today) {
 }
 
 // Items a person would take for one cycle type with their picks applied.
-// picks: { "lunch:0": productId | null(excluded) | "" (not chosen yet) }
+// picks: { "lunch:0": option index | null (excluded) | "" (not chosen yet) }
+// A set option adds one item per product in the set.
 export function itemsFromPicks(method, picks) {
   const out = [];
   for (const meal of ["lunch", "dinner"]) {
     method[meal].forEach((slot, i) => {
-      const pid = picks[`${meal}:${i}`];
-      if (pid) out.push({ meal, label: slot.label, amount: slot.amount || "", productId: pid });
+      const pick = picks[`${meal}:${i}`];
+      if (pick === null || pick === "" || pick === undefined) return;
+      for (const pid of slotOptions(slot)[pick] || []) {
+        out.push({ meal, label: slot.label, amount: slot.amount || "", productId: pid });
+      }
     });
   }
   return out;
@@ -110,9 +128,9 @@ export function defaultPicks(method, carryOver = []) {
   const picks = {};
   for (const meal of ["lunch", "dinner"]) {
     method[meal].forEach((slot, i) => {
-      const opts = slot.options || [];
-      const kept = opts.find((id) => carryOver.includes(id));
-      picks[`${meal}:${i}`] = opts.length === 1 ? opts[0] : (kept || "");
+      const opts = slotOptions(slot);
+      const kept = opts.findIndex((ids) => ids.some((id) => carryOver.includes(id)));
+      picks[`${meal}:${i}`] = opts.length === 1 ? 0 : (kept !== -1 ? kept : "");
     });
   }
   return picks;

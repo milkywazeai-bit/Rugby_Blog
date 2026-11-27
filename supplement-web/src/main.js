@@ -7,6 +7,7 @@ import {
 } from "./firebase.js";
 import { parseIherbLinks, findUnsupportedLinks, iherbSearchUrl, describeAmount, isIherbUrl } from "./iherb.js";
 import { compressPhoto, isSafePhoto } from "./photo.js";
+import { parseShot, photoRect, matchProduct } from "./shot.js";
 import {
   defaultPlan, validPlan, methodIndexOf, nextCycle, dailyUse, remaining, cycleStatus, itemsFromPicks, defaultPicks,
   slotOptions, baseSlots, baseItemsFromPicks, defaultBasePicks, planProductIds
@@ -1261,9 +1262,9 @@ function renderAdmin() {
     : `<div class="empty"><strong>아직 상황별 세트가 없어요.</strong><span>"+ 새 세트"로 운동 전 부스터처럼 같이 먹는 제품 묶음을 만들면, 사용자가 추가 영양제 탭에서 한 번에 등록할 수 있어요.</span></div>`;
 }
 
-function openSetEditor(id) {
+function openSetEditor(id, presetItems = null) {
   const s = id ? state.sets.find((x) => x.id === id) : null;
-  setDraft = { id: s ? s.id : null, title: s ? s.title : "", note: s ? s.note || "" : "", items: s ? (s.items || []).map(cleanSetItem) : [], query: "" };
+  setDraft = { id: s ? s.id : null, title: s ? s.title : "", note: s ? s.note || "" : "", items: s ? (s.items || []).map(cleanSetItem) : (presetItems || []), query: "" };
   openSheet(s ? "세트 수정" : "새 상황별 세트", `<form id="setForm">
     <div class="field"><label for="setTitle">세트 이름</label><input id="setTitle" maxlength="60" placeholder="예: 운동 퍼포먼스 부스터" value="${esc(setDraft.title)}"></div>
     <div class="field"><label for="setNote">설명 · 먹는 법</label><textarea id="setNote" rows="3" maxlength="400" placeholder="예: 운동 전 공복에 같이 먹어요.">${esc(setDraft.note)}</textarea></div>
@@ -1617,7 +1618,8 @@ function renderImportRows() {
         <input data-imp="brand" value="${esc(r.brand)}" placeholder="브랜드" aria-label="브랜드">
         <div class="row2"><input data-imp="dose" value="${esc(r.dose)}" placeholder="함량" aria-label="함량">
           <input data-imp="count" type="number" min="0" value="${esc(r.count ?? "")}" placeholder="개수" aria-label="개수"></div>
-        ${r.duplicate ? `<span class="chip low">이미 목록에 있어요 — 건너뜀</span>` : ""}
+        ${r.duplicate ? `<span class="chip low">이미 목록에 있어요 — ${r.existingId ? "있는 제품을 써요" : "건너뜀"}</span>` : ""}
+        ${r.fromShot ? `<a class="iherb-link" href="${esc(r.url)}" target="_blank" rel="noopener">아이허브에서 찾아보기 →</a>` : ""}
       </div>
       <button type="button" class="rot-del" data-import-remove="${i}" aria-label="빼기">✕</button>
     </div>`).join("") +
@@ -1655,22 +1657,148 @@ async function saveImport() {
     return;
   }
   const rows = importRows.filter((r) => !r.duplicate);
-  if (!rows.length) { toast("저장할 제품이 없어요."); return; }
+  const makeSet = !!($("#shotMakeSet") && $("#shotMakeSet").checked);
+  if (!rows.length && !makeSet) { toast("저장할 제품이 없어요."); return; }
   if (!admin) { toast("제품 추가는 관리자만 할 수 있어요."); return; }
   const uid = state.user.uid;
   try {
     const batch = writeBatch(db);
-    for (const r of rows) {
-      batch.set(doc(collection(db, "products")), {
+    const ids = [];
+    for (const r of importRows) {
+      if (r.duplicate) { if (r.existingId) ids.push(r.existingId); continue; }
+      const ref = doc(collection(db, "products"));
+      ids.push(ref.id);
+      batch.set(ref, {
         name: r.name.trim(), brand: (r.brand || "").trim(), dose: (r.dose || "").trim(),
         count: r.count || null, form: r.form || "", volume: r.volume || "",
-        url: r.url, iherbId: r.iherbId, photo: r.photo || null, createdBy: uid, createdAt: serverTimestamp()
+        url: r.url, iherbId: r.iherbId || null, photo: r.photo || null, createdBy: uid, createdAt: serverTimestamp()
       });
     }
-    await batch.commit();
+    if (rows.length) await batch.commit();
     closeSheet();
-    toast(`${rows.length}개를 저장했어요.`);
+    if (rows.length) toast(`${rows.length}개를 저장했어요.`);
+    if (makeSet && ids.length) {
+      adminView = "sets";
+      renderAdmin();
+      openSetEditor(null, ids.map((id) => ({ productId: id, perDose: 1, meals: ["morning"], memo: "" })));
+    }
   } catch (e) { fail(e); }
+}
+
+// ---------- 캡처로 추가 (admin) ----------
+// Reads product names out of an iHerb screenshot in the browser (no server).
+let ocrScript = null;
+function loadOcr() {
+  if (!ocrScript) {
+    ocrScript = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "ocr/tesseract.min.js";
+      s.onload = resolve;
+      s.onerror = () => { ocrScript = null; reject(new Error("글자 인식 도구를 불러오지 못했어요. 인터넷 연결을 확인해주세요.")); };
+      document.head.appendChild(s);
+    });
+  }
+  return ocrScript;
+}
+
+function fileToImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("사진을 읽을 수 없어요.")); };
+    img.src = url;
+  });
+}
+
+function cropPhoto(img, r) {
+  const c = document.createElement("canvas");
+  c.width = 320; c.height = 320;
+  const g = c.getContext("2d");
+  g.fillStyle = "#ffffff";
+  g.fillRect(0, 0, 320, 320);
+  g.drawImage(img, r.x, r.y, r.w, r.h, 0, 0, 320, 320);
+  return c.toDataURL("image/jpeg", 0.82);
+}
+
+async function readShot(file, status) {
+  await loadOcr();
+  const img = await fileToImage(file);
+  const W = img.naturalWidth, H = img.naturalHeight;
+  // Only the text column, enlarged and in grey: reads Korean much better.
+  const left = Math.round(W * 0.26);
+  const scale = Math.min(2, Math.sqrt(12e6 / ((W - left) * H)));
+  const c = document.createElement("canvas");
+  c.width = Math.round((W - left) * scale); c.height = Math.round(H * scale);
+  const g = c.getContext("2d");
+  g.imageSmoothingQuality = "high";
+  g.drawImage(img, left, 0, W - left, H, 0, 0, c.width, c.height);
+  const px = g.getImageData(0, 0, c.width, c.height);
+  const a = px.data;
+  for (let i = 0; i < a.length; i += 4) { const v = 0.299 * a[i] + 0.587 * a[i + 1] + 0.114 * a[i + 2]; a[i] = a[i + 1] = a[i + 2] = v; }
+  g.putImageData(px, 0, 0);
+  const base = new URL("ocr/", location.href).href;
+  const worker = await window.Tesseract.createWorker(["kor", "eng"], 1, {
+    workerPath: base + "worker.min.js", corePath: base + "core", langPath: base + "lang", gzip: true,
+    logger: (m) => {
+      const pct = Math.round((m.progress || 0) * 100);
+      if (/traineddata/.test(m.status)) status(`한글 인식 데이터 받는 중… ${pct}% (처음 한 번만)`);
+      else if (/recogniz/.test(m.status)) status(`글자 읽는 중… ${pct}%`);
+    }
+  });
+  try {
+    await worker.setParameters({ preserve_interword_spaces: "1" });
+    const { data } = await worker.recognize(c);
+    const lines = (data.lines || []).map((l) => ({ t: l.text, x0: l.bbox.x0, y0: l.bbox.y0, x1: l.bbox.x1, y1: l.bbox.y1 }));
+    return parseShot(lines, { width: c.width }).map((it) => {
+      const top = it.top / scale;
+      return { ...it, photo: cropPhoto(img, photoRect({ top }, W, H)) };
+    });
+  } finally {
+    await worker.terminate();
+  }
+}
+
+const normName = (s) => String(s || "").toLowerCase().replace(/[\s,.()®]/g, "");
+
+function openShotSheet() {
+  importRows = [];
+  openSheet("캡처로 제품 추가", `
+    <p class="hint">아이허브 앱의 <strong>공유된 상품 목록·장바구니·위시리스트</strong> 화면을 캡처해서 올리면, 제품 이름과 사진을 읽어서 채워줘요. 여러 장을 한 번에 골라도 돼요.
+      글자를 기계가 읽는 거라 <strong>틀린 글자는 고쳐주세요.</strong> 처음 한 번은 한글 인식 데이터(약 7MB)를 받느라 시간이 조금 걸려요.</p>
+    <label class="btn-primary wide shot-pick">캡처 사진 고르기<input type="file" accept="image/*" multiple id="shotFile" hidden></label>
+    <p id="shotStatus" class="mc-note" aria-live="polite"></p>
+    <label class="check-row"><input type="checkbox" id="shotMakeSet" checked> 저장한 뒤 이 제품들로 상황별 세트 만들기</label>
+    <div id="importResult"></div>`);
+}
+
+async function handleShotFiles(files) {
+  const status = (msg) => { const el = $("#shotStatus"); if (el) el.textContent = msg; };
+  const list = [...files].filter((f) => /^image\//.test(f.type));
+  if (!list.length) return;
+  let found = 0;
+  try {
+    for (const [n, f] of list.entries()) {
+      status(list.length > 1 ? `${n + 1}/${list.length}번째 사진 읽는 중…` : "사진 읽는 중…");
+      const items = await readShot(f, (m) => status(list.length > 1 ? `${n + 1}/${list.length} · ${m}` : m));
+      for (const it of items) {
+        const existing = matchProduct(it, state.products);
+        if (importRows.some((r) => (existing && r.existingId === existing.id) || (normName(r.brand) === normName(it.brand) && normName(r.name) === normName(it.name)))) continue;
+        importRows.push({
+          name: existing ? existing.name : it.name, brand: existing ? existing.brand || it.brand : it.brand, dose: it.dose, count: it.count, form: it.form, volume: it.volume,
+          url: iherbSearchUrl(`${it.brand} ${it.name}`), iherbId: null, photo: it.photo,
+          duplicate: !!existing, existingId: existing ? existing.id : null, fromShot: true
+        });
+        found++;
+      }
+    }
+  } catch (e) {
+    status("");
+    fail(e);
+    return;
+  }
+  status(found ? `${found}개 제품을 찾았어요. 아래에서 확인해주세요.` : "제품을 찾지 못했어요. 제품 이름이 보이게 다시 캡처해주세요.");
+  renderImportRows();
 }
 
 // ---------- notifications (while the app is open) ----------
@@ -1810,6 +1938,7 @@ function wire() {
   }));
   document.querySelectorAll(".tab-btn").forEach((b) => b.addEventListener("click", () => switchTab(b.dataset.tab)));
   $("#importOpen").addEventListener("click", openImportSheet);
+  $("#shotOpen").addEventListener("click", openShotSheet);
   $("#extraAdd").addEventListener("click", openProductPicker);
   $("#invRestock").addEventListener("click", () => openRestockSheet());
   document.querySelectorAll("[data-history]").forEach((b) => b.addEventListener("click", () => {
@@ -1911,6 +2040,9 @@ function wire() {
         sheetPhoto = data;
         $("#photoPreview").innerHTML = `<img alt="" src="${data}">`;
       });
+    } else if (t.id === "shotFile") {
+      handleShotFiles(t.files);
+      t.value = "";
     } else if (t.matches("[data-import-photo]")) {
       const i = parseInt(t.dataset.importPhoto, 10);
       handlePhotoInput(t, (data) => { importRows[i].photo = data; renderImportRows(); });

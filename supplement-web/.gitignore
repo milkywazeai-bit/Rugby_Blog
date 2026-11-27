@@ -3,3 +3,4 @@ public/app.js
 *.log
 .firebase/
 service-account*.json
+public/ocr/

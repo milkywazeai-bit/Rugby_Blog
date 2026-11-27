@@ -13,6 +13,9 @@
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
-    "firebase-tools": "^15.37.0"
+    "firebase-tools": "^15.37.0",
+    "tesseract.js": "5.1.1",
+    "@tesseract.js-data/kor": "^1.0.0",
+    "@tesseract.js-data/eng": "^1.0.0"
   }
 }

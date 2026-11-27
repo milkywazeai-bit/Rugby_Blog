@@ -368,3 +368,9 @@ button.item-body{cursor:pointer}
 .set-add-top .cy-prod{flex:1;min-width:0}
 .set-add-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .chip.set{background:#EDE3F5;color:#6A3F8C}
+
+/* 캡처로 추가 */
+.btn-col{display:flex;flex-direction:column;gap:6px;flex-shrink:0}
+.shot-pick{display:block;text-align:center;cursor:pointer;margin:10px 0 4px}
+.check-row{display:flex;align-items:center;gap:8px;font-size:.88rem;margin:8px 0 4px}
+.check-row input{width:18px;height:18px;accent-color:var(--accent)}

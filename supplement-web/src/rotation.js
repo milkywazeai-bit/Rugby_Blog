@@ -21,6 +21,16 @@ export function optionIds(opt) {
   return opt && Array.isArray(opt.ids) ? opt.ids : [];
 }
 
+// Every product the cycle plan uses (all methods and the 4번 base set).
+export function planProductIds(plan) {
+  const ids = new Set();
+  const slots = [];
+  for (const m of (plan && plan.methods) || []) slots.push(...(m.lunch || []), ...(m.dinner || []));
+  slots.push(...((plan && plan.base && plan.base.slots) || []));
+  for (const slot of slots) for (const opt of slot.options || []) for (const id of optionIds(opt)) ids.add(id);
+  return ids;
+}
+
 export function slotOptions(slot) {
   return (slot.options || []).map(optionIds).filter((ids) => ids.length);
 }

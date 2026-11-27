@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  dayEntries, dailyUseAll, daysLeft, productsInUse, historyGroups, weekStart, monthKey, isoDow, DEFAULT_MEAL_TIMES, autoTakeList, mealTimes, extraMeal
+  dayEntries, dailyUseAll, daysLeft, productsInUse, historyGroups, weekStart, monthKey, isoDow, DEFAULT_MEAL_TIMES, autoTakeList, mealTimes, extraMeal, extraMeals
 } from "../src/schedule.js";
 
 const DAY = 20784; // 2026-11-27, a Friday
@@ -119,4 +119,19 @@ test("each person's meal times order and time the doses", () => {
 test("mealTimes falls back to defaults for missing or bad values", () => {
   assert.deepEqual(mealTimes(null), DEFAULT_MEAL_TIMES);
   assert.deepEqual(mealTimes({ mealTimes: { morning: -5, lunch: "x", dinner: 1200 } }), { ...DEFAULT_MEAL_TIMES, dinner: 1200 });
+});
+
+test("an extra taken at two meals gives two doses and doubles daily use", () => {
+  const it = { id: "m", productId: "pm", perDose: 1, meals: ["dinner", "morning"], days: [1, 2, 3, 4, 5, 6, 7] };
+  assert.deepEqual(extraMeals(it), ["morning", "dinner"]);
+  const list = dayEntries({ cycle: null, extras: [it], day: DAY });
+  assert.deepEqual(list.map((e) => e.key), ["ex-m-morning", "ex-m-dinner"]);
+  assert.equal(dailyUseAll({ cycle: null, extras: [it] }).pm, 2);
+});
+
+test("a single meal keeps the old key", () => {
+  const it = { id: "s", productId: "ps", meals: ["lunch"], days: [1, 2, 3, 4, 5, 6, 7] };
+  assert.deepEqual(dayEntries({ cycle: null, extras: [it], day: DAY }).map((e) => e.key), ["ex-s"]);
+  assert.deepEqual(extraMeals({ meal: "dinner" }), ["dinner"]);
+  assert.deepEqual(extraMeals({ meals: [] , timeMinutes: 13 * 60 }), ["lunch"]);
 });

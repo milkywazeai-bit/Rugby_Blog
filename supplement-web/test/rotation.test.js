@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   defaultPlan, validPlan, nextCycle, dailyUse, remaining, cycleStatus, itemsFromPicks, defaultPicks, perDose,
-  baseSlots, baseItemsFromPicks, defaultBasePicks
+  baseSlots, baseItemsFromPicks, defaultBasePicks, planProductIds
 } from "../src/rotation.js";
 
 const plan = defaultPlan();
@@ -101,4 +101,10 @@ test("plan validation", () => {
   assert.equal(validPlan(plan), true);
   assert.equal(validPlan({ methods: [] }), false);
   assert.equal(validPlan({ methods: plan.methods }), true);
+});
+
+test("planProductIds lists every product in methods and the base set", () => {
+  const ids = planProductIds(defaultPlan());
+  for (const id of ["wish-13", "wish-18", "wish-07", "wish-23", "wish-33", "wish-37", "wish-09", "wish-02", "wish-39", "wish-01", "wish-03"]) assert.ok(ids.has(id), id);
+  assert.equal(planProductIds(null).size, 0);
 });

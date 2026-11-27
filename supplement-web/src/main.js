@@ -9,10 +9,10 @@ import { parseIherbLinks, findUnsupportedLinks, iherbSearchUrl, describeAmount, 
 import { compressPhoto, isSafePhoto } from "./photo.js";
 import {
   defaultPlan, validPlan, methodIndexOf, nextCycle, dailyUse, remaining, cycleStatus, itemsFromPicks, defaultPicks,
-  slotOptions, baseSlots, baseItemsFromPicks, defaultBasePicks
+  slotOptions, baseSlots, baseItemsFromPicks, defaultBasePicks, planProductIds
 } from "./rotation.js";
 import {
-  dayEntries, dailyUseAll, daysLeft, productsInUse, MEALS, mealTimes, mealLabel, extraMeal, historyGroups, extraAmount, autoTakeList
+  dayEntries, dailyUseAll, daysLeft, productsInUse, MEALS, mealTimes, mealLabel, extraMeal, extraMeals, historyGroups, extraAmount, autoTakeList
 } from "./schedule.js";
 
 const DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"];
@@ -1116,7 +1116,7 @@ function daysText(days) {
 
 function renderExtras() {
   const box = $("#extrasList");
-  const order = (it) => MEALS.findIndex((m) => m.key === extraMeal(it));
+  const order = (it) => MEALS.findIndex((m) => m.key === extraMeals(it)[0]);
   const items = [...state.items].sort((a, b) => order(a) - order(b));
   if (!items.length) {
     box.innerHTML = `<div class="empty"><strong>아직 추가 영양제가 없어요.</strong><span>유산균 사이클 말고 따로 챙겨 먹는 영양제를 제품 목록에서 골라 추가하세요.</span></div>`;
@@ -1131,7 +1131,7 @@ function renderExtras() {
       <button class="item-body" data-edit-item="${esc(it.id)}">
         ${p && p.brand ? `<span class="opt-brand">${esc(p.brand)}</span>` : ""}
         <span class="item-name">${esc(name)}</span>
-        <span class="item-meta"><span class="chip meal">${mealLabel(extraMeal(it))}</span><span>${esc(daysText(it.days))}</span><span>${fmtNum(extraAmount(it))}${esc(unitOf(it.productId))}씩</span>${left === null ? "" : `<span class="chip stock">재고 ${Math.max(0, left)}</span>`}</span>
+        <span class="item-meta">${extraMeals(it).map((m) => `<span class="chip meal">${mealLabel(m)}</span>`).join("")}<span>${esc(daysText(it.days))}</span><span>${fmtNum(extraAmount(it))}${esc(unitOf(it.productId))}씩</span>${left === null ? "" : `<span class="chip stock">재고 ${Math.max(0, left)}</span>`}</span>
       </button>
       <button class="btn-small" data-edit-item="${esc(it.id)}">수정</button>
     </div>`;
@@ -1140,7 +1140,7 @@ function renderExtras() {
 
 // Step 1: pick a product from the shared catalog.
 function openProductPicker() {
-  openSheet("제품 목록에서 고르기", `<input id="pickSearch" class="search" type="search" placeholder="제품명이나 브랜드로 찾기" aria-label="제품 검색"><div id="pickList"></div>`);
+  openSheet("제품 목록에서 고르기", `<input id="pickSearch" class="search" type="search" placeholder="제품명이나 브랜드로 찾기" aria-label="제품 검색"><p class="hint">유산균 사이클(4번 포함) 제품은 여기서 빠져 있어요. 유산균 사이클 탭에서 관리해요.</p><div id="pickList"></div>`);
   renderProductPicker("");
 }
 
@@ -1149,7 +1149,9 @@ function renderProductPicker(q) {
   if (!box) return;
   const query = q.trim().toLowerCase();
   const mine = new Set(state.items.map((it) => it.productId).filter(Boolean));
-  const list = state.products.filter((p) => !query || productLabel(p).toLowerCase().includes(query));
+  // 유산균 사이클 products are managed in their own tab, so they are not offered here.
+  const cycleIds = planProductIds(state.plan || defaultPlan());
+  const list = state.products.filter((p) => !cycleIds.has(p.id) && (!query || productLabel(p).toLowerCase().includes(query)));
   box.innerHTML = list.length ? list.map((p) => `<button type="button" class="opt pick-row" data-pick-product="${esc(p.id)}">
       ${thumbHtml(p.name, isSafePhoto(p.photo) ? p.photo : null, "opt-photo")}
       <span class="opt-text">${p.brand ? `<span class="opt-brand">${esc(p.brand)}</span>` : ""}<span class="opt-name">${esc(p.name)}</span><span class="opt-brand">${esc(describeAmount(p))}</span></span>
@@ -1163,16 +1165,16 @@ function openItemSheet(itemId, fromProductId) {
   const it = itemId ? state.items.find((x) => x.id === itemId) : null;
   const prod = productById(fromProductId || (it && it.productId));
   const base = it || { perDose: 1, meal: "morning", days: [1, 2, 3, 4, 5, 6, 7], productId: prod ? prod.id : null };
-  const meal = extraMeal(base);
+  const meals = extraMeals(base);
   const name = prod ? prod.name : (it && it.name) || "";
   const stock = prod ? (invCount(prod.id) ?? prod.count ?? 30) : "";
   openSheet(it ? "추가 영양제 수정" : "추가 영양제 등록", `
     <form id="itemForm" data-id="${esc(itemId || "")}" data-product="${esc(base.productId || "")}">
       ${prod ? `<div class="pick-head">${productRow(prod.id)}<a class="iherb-link" target="_blank" rel="noopener" href="${esc(safeIherbUrl(prod.url, productLabel(prod)))}">아이허브에서 보기 →</a></div>`
         : `<div class="field"><label for="fName">이름</label><input id="fName" required maxlength="80" value="${esc(name)}"></div>`}
-      <div class="field"><span class="label-like">언제 먹나요</span>
-        <div class="meal-pick" role="radiogroup" aria-label="먹는 때">${MEALS.map((m) => `<button type="button" class="meal-chip ${m.key === meal ? "on" : ""}" role="radio" data-meal="${m.key}" aria-checked="${m.key === meal}">${m.label}</button>`).join("")}</div>
-        <p class="hint">아침·점심·저녁 시간은 내 정보 → 복용 시간에서 바꿀 수 있어요.</p>
+      <div class="field"><span class="label-like">언제 먹나요 <small>(여러 개 고를 수 있어요)</small></span>
+        <div class="meal-pick" role="group" aria-label="먹는 때">${MEALS.map((m) => `<button type="button" class="meal-chip ${meals.includes(m.key) ? "on" : ""}" data-meal="${m.key}" aria-pressed="${meals.includes(m.key)}">${m.label}</button>`).join("")}</div>
+        <p class="hint">고른 끼니마다 "한 번에 몇 개"만큼 먹어요. 끼니 시간은 내 정보 → 복용 시간에서 바꿀 수 있어요.</p>
       </div>
       <div class="field"><label for="fDose">한 번에 몇 개</label><input id="fDose" type="number" min="0.5" step="0.5" inputmode="decimal" value="${esc(extraAmount(base))}"></div>
       <div class="field"><span class="label-like">요일</span>
@@ -1195,14 +1197,14 @@ async function saveItemForm(form) {
   if (!name) { if ($("#fName")) $("#fName").focus(); return; }
   const days = [...form.querySelectorAll(".day-chip.on")].map((b) => parseInt(b.dataset.day, 10));
   if (!days.length) { toast("요일을 하나 이상 골라주세요."); return; }
-  const picked = form.querySelector(".meal-chip.on");
-  const meal = picked ? picked.dataset.meal : "morning";
+  const meals = [...form.querySelectorAll(".meal-chip.on")].map((b) => b.dataset.meal);
+  if (!meals.length) { toast("아침·점심·저녁 중 하나 이상 골라주세요."); return; }
   const perDose = Math.max(0.5, parseFloat($("#fDose").value) || 1);
-  const data = { name, productId: pid, perDose, meal, days };
+  const data = { name, productId: pid, perDose, meals, days };
   const uid = state.user.uid;
   try {
     const batch = writeBatch(db);
-    if (form.dataset.id) batch.update(doc(db, "users", uid, "items", form.dataset.id), { ...data, timeMinutes: deleteField() });
+    if (form.dataset.id) batch.update(doc(db, "users", uid, "items", form.dataset.id), { ...data, timeMinutes: deleteField(), meal: deleteField() });
     else batch.set(doc(collection(db, "users", uid, "items")), { ...data, createdDay: epochDay(), createdAt: serverTimestamp() });
     const stockInput = $("#fStock");
     if (pid && stockInput && stockInput.value !== "") {
@@ -1635,7 +1637,8 @@ function wire() {
     const t = e.target.closest(".meal-chip,[data-take-all],[data-take-section],#autoToggle,#autoSet,[data-take],[data-skip],[data-undo],[data-edit-item],[data-adopt],[data-edit-product],[data-close-sheet],[data-delete-item],[data-delete-product],[data-photo-clear],[data-import-remove],.day-chip,#importParse,#importSave,#rotEdit,#rotStart,#cyStock,#cyNext,#cyReset,#cyConfirm,[data-restock],[data-goto],[data-pick-product],[data-inv-edit]");
     if (!t) return;
     if (t.classList.contains("meal-chip")) {
-      t.parentElement.querySelectorAll(".meal-chip").forEach((b) => { b.classList.toggle("on", b === t); b.setAttribute("aria-checked", b === t); });
+      t.classList.toggle("on");
+      t.setAttribute("aria-pressed", t.classList.contains("on"));
     } else if ("takeAll" in t.dataset) takePending(null);
     else if (t.dataset.takeSection) takePending(t.dataset.takeSection);
     else if (t.id === "autoToggle") openAutoSheet();

@@ -42,6 +42,12 @@ export function extraAmount(item) {
   return typeof item.perDose === "number" && item.perDose > 0 ? item.perDose : 1;
 }
 
+// An extra can be taken at several meals (아침 + 저녁 ...), in meal order.
+export function extraMeals(item) {
+  const list = Array.isArray(item.meals) ? MEAL_KEYS.filter((k) => item.meals.includes(k)) : [];
+  return list.length ? list : [extraMeal(item)];
+}
+
 // Everything to take on `day`: the running cycle, the base set (4번) and extra
 // supplements scheduled for that weekday. Each entry has a stable key per day.
 export function dayEntries({ cycle, extras, day, times = DEFAULT_MEAL_TIMES }) {
@@ -74,9 +80,12 @@ export function dayEntries({ cycle, extras, day, times = DEFAULT_MEAL_TIMES }) {
   for (const it of extras || []) {
     if (!Array.isArray(it.days) || !it.days.includes(dow)) continue;
     if (typeof it.createdDay === "number" && day < it.createdDay) continue;
-    const meal = extraMeal(it);
-    add({ key: `ex-${it.id}`, kind: "extra", productId: it.productId || null, itemId: it.id, label: it.name || "",
-      amount: extraAmount(it), minutes: at(meal), meal });
+    const meals = extraMeals(it);
+    for (const meal of meals) {
+      // One meal keeps the plain key so logs saved before multi-meal still match.
+      add({ key: meals.length === 1 ? `ex-${it.id}` : `ex-${it.id}-${meal}`, kind: "extra", productId: it.productId || null, itemId: it.id,
+        label: it.name || "", amount: extraAmount(it), minutes: at(meal), meal });
+    }
   }
   const kindOrder = { cycle: 0, base: 1, extra: 2 };
   return [...out.values()].sort((a, b) => order(a.meal) - order(b.meal) || kindOrder[a.kind] - kindOrder[b.kind]);
@@ -90,7 +99,7 @@ export function dailyUseAll({ cycle, extras }) {
   for (const it of (cycle && cycle.base && cycle.base.items) || []) addUse(it.productId, perDose(it.amount));
   for (const it of extras || []) {
     const days = Array.isArray(it.days) ? it.days.length : 7;
-    addUse(it.productId, extraAmount(it) * days / 7);
+    addUse(it.productId, extraAmount(it) * extraMeals(it).length * days / 7);
   }
   return use;
 }

@@ -324,11 +324,13 @@ function renderRotation() {
   const ending = st.daysLeft === null ? ""
     : st.daysLeft <= 0
       ? `<div class="cy-alert">${esc(mainName)}이(가) 다 떨어졌을 거예요. 다음 사이클을 시작하세요.</div>`
-      : `<p class="mc-note">${esc(mainName)} 기준 약 ${st.daysLeft}일 남았어요 · ${fmtDay(st.endDay)}쯤 다음 사이클로 넘어가요</p>`;
+      : `<p class="mc-note">${esc(mainName)} 기준 약 ${st.daysLeft}일 남았어요<br>${fmtDay(st.endDay)}쯤 다음 사이클로 넘어가요</p>`;
   const base = cycle.base;
+  const planned = plan ? plan.methods.find((x) => x.id === cycle.methodId) : null;
+  const cur = planned ? { title: planned.title, subtitle: planned.subtitle } : { title: cycle.title, subtitle: cycle.subtitle };
   $("#rotNow").innerHTML = `<div class="month-card now">
     <div class="mc-when">지금 사이클 <span class="chip code">${esc(cycleCode(cycle))}</span><span class="cy-days">${fmtDay(cycle.startDay)} 시작 · ${st.day}일째</span></div>
-    <div class="mc-title">${esc(cycle.title)}${cycle.subtitle ? ` <span class="mc-sub">${esc(cycle.subtitle)}</span>` : ""}</div>
+    <div class="mc-title">${esc(cur.title)}${cur.subtitle ? ` <span class="mc-sub">${esc(cur.subtitle)}</span>` : ""}</div>
     ${ending}
     ${mealSections(cycle.items || [], use, cycle.stock, today)}
     <div class="cy-actions"><button class="btn-small" id="cyStock" type="button">보유 개수 수정</button>
@@ -610,7 +612,7 @@ function renderRotationEditor() {
     <p class="hint">모든 사용자가 사이클을 고를 때 보는 구성이에요. 첫 번째 점심 칸이 사이클의 주인공이라, 이 제품이 떨어지면 다음 사이클로 넘어가요. 이미 진행 중인 사이클은 그대로이고 다음 사이클부터 반영돼요.</p>
     ${draftPlan.methods.map((m, mi) => `<section class="pm" data-m="${mi}">
       <div class="pm-head"><span class="chip code">${mi + 1}</span>
-        <input data-pm="title" value="${esc(m.title)}" placeholder="섭취법 ${mi + 1}" aria-label="사이클 이름">
+        <input data-pm="title" value="${esc(m.title)}" placeholder="사이클 ${mi + 1}" aria-label="사이클 이름">
         <input data-pm="subtitle" value="${esc(m.subtitle || "")}" placeholder="설명 (예: 가든 유산균)" aria-label="설명"></div>
       ${["lunch", "dinner"].map((meal) => `<div class="pm-meal"><div class="meal-head">${meal === "lunch" ? "점심 먹고" : "저녁 먹고"}</div>
         ${m[meal].map((slot, si) => slotEditor(slot, mi, meal, si)).join("")}
@@ -651,7 +653,7 @@ function handleEditorClick(e) {
   if (!t) return false;
   if ("methodAdd" in t.dataset) {
     const n = draftPlan.methods.length + 1;
-    draftPlan.methods.push({ id: "m" + Date.now().toString(36), title: "섭취법 " + n, subtitle: "", lunch: [], dinner: [] });
+    draftPlan.methods.push({ id: "m" + Date.now().toString(36), title: "사이클 " + n, subtitle: "", lunch: [], dinner: [] });
   } else if (t.dataset.methodDel) {
     if (!confirm("이 사이클을 삭제할까요? 저장하기 전까지는 적용되지 않아요.")) return true;
     draftPlan.methods.splice(parseInt(t.dataset.methodDel, 10), 1);
@@ -721,7 +723,7 @@ async function savePlan() {
     }
   };
   plan.methods.forEach((m) => {
-    m.title = (m.title || "").trim() || "섭취법";
+    m.title = (m.title || "").trim() || "사이클";
     ["lunch", "dinner"].forEach((meal) => {
       m[meal] = m[meal].filter((s) => (s.label || "").trim() || s.options.length)
         .map(clean);

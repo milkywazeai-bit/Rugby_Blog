@@ -1,4 +1,4 @@
-// Probiotic cycles. The admin defines the cycle types (섭취법) in config/rotation;
+// Probiotic cycles. The admin defines the cycle types in config/rotation;
 // each person starts their own cycle on the day they confirm it, picks one product
 // for "pick one" slots, may drop slots, and enters how many they have on hand.
 // A cycle lasts while its main product (the first lunch slot) lasts.
@@ -30,14 +30,14 @@ export function slotOptions(slot) {
 export function defaultPlan() {
   return {
     methods: [
-      { id: "m1", title: "섭취법 1", subtitle: "가든 유산균", lunch: [
+      { id: "m1", title: "사이클 1", subtitle: "가든 유산균", lunch: [
         { label: "가든 유산균", options: GARDEN_OF_LIFE, amount: "1캡슐" }
       ], dinner: [] },
-      { id: "m2", title: "섭취법 2", subtitle: "다균주 + 플로라", lunch: [
+      { id: "m2", title: "사이클 2", subtitle: "다균주 + 플로라", lunch: [
         { label: "다균주 유산균", options: MULTI_STRAIN, amount: "1캡슐" },
         { label: "플로라파지", options: [one("wish-07")], amount: "1캡슐" }
       ], dinner: [] },
-      { id: "m3", title: "섭취법 3", subtitle: "점막 개선", lunch: [
+      { id: "m3", title: "사이클 3", subtitle: "점막 개선", lunch: [
         { label: "점막 개선 세트", options: MUCOSA_SETS, amount: "각 1캡슐" }
       ], dinner: [] }
     ],

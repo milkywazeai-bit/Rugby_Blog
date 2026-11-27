@@ -333,13 +333,14 @@ function renderRotation() {
     <div class="mc-title">${esc(cur.title)}${cur.subtitle ? ` <span class="mc-sub">${esc(cur.subtitle)}</span>` : ""}</div>
     ${ending}
     ${mealSections(cycle.items || [], use, cycle.stock, today)}
-    <div class="cy-actions"><button class="btn-small" id="cyStock" type="button">보유 개수 수정</button>
+    <div class="cy-actions"><button class="btn-small" data-restock type="button">새 통 추가</button><button class="btn-small" id="cyStock" type="button">보유 개수 수정</button>
       ${plan ? `<button class="btn-small primary" id="cyNext" type="button">다음 사이클 시작</button>` : ""}</div>
   </div>
   ${base && (base.items || []).length ? `<div class="month-card base">
     <div class="mc-when">계속 먹는 기본 구성 <span class="cy-days">${fmtDay(base.startDay)}부터 · ${today - base.startDay + 1}일째</span></div>
     <div class="mc-title">${esc(base.title || "4번 사이클")}${base.subtitle ? ` <span class="mc-sub">${esc(base.subtitle)}</span>` : ""}</div>
     ${mealSections(base.items, use, cycle.stock, today)}
+    <div class="cy-actions"><button class="btn-small" data-restock type="button">새 통 추가</button></div>
   </div>` : ""}`;
   if (plan) {
     const n = nextCycle(plan, cycle);
@@ -738,6 +739,131 @@ async function savePlan() {
   } catch (e) { fail(e); }
 }
 
+// ----- new bottles bought -----
+// Bottles are added on top of what's left today. Products not taken right now
+// (e.g. bought ahead for the next cycle) keep their count until that cycle starts.
+let restock = null;
+
+function openRestockSheet() {
+  const pids = [...new Set(allItems(state.cycle).map((it) => it.productId))];
+  restock = { rows: pids.map((pid) => ({ pid, n: 0, per: productById(pid)?.count || 30 })) };
+  openSheet("새 통 추가", `<form id="restockForm"></form>`);
+  renderRestock();
+}
+
+function restockLeft(pid) {
+  const cy = state.cycle;
+  return remaining((cy.stock || {})[pid], dailyUse(allItems(cy))[pid] || 0, epochDay()) ?? 0;
+}
+
+function renderRestock() {
+  const form = $("#restockForm");
+  if (!form || !restock) return;
+  const sheet = $(".sheet");
+  const scroll = sheet.scrollTop;
+  const listed = new Set(restock.rows.map((r) => r.pid));
+  const others = state.products.filter((p) => !listed.has(p.id)).sort((a, b) => productLabel(a).localeCompare(productLabel(b), "ko"));
+  form.innerHTML = `<p class="hint">산 만큼 통 수를 올려주세요. 지금 남은 개수에 더해져요. 다음 사이클용으로 미리 산 제품은 아래에서 추가하면, 그 사이클을 시작할 때 개수가 자동으로 채워져요.</p>
+    ${restock.rows.map((r, i) => {
+      const left = restockLeft(r.pid);
+      return `<div class="rs-row" data-rs="${i}">${productRow(r.pid)}
+        <div class="rs-ctrl">
+          <div class="stepper"><button type="button" data-rs-step="-1" aria-label="한 통 빼기">−</button><span class="rs-n">${r.n}통</span><button type="button" data-rs-step="1" aria-label="한 통 더하기">+</button></div>
+          <label class="rs-per">한 통 <input type="number" min="1" inputmode="numeric" data-rs-per value="${esc(r.per)}">개</label>
+          <span class="rs-result">지금 ${left}개${r.n ? ` → <strong>${left + r.n * r.per}개</strong>` : ""}</span>
+        </div></div>`;
+    }).join("")}
+    <select id="rsAdd" aria-label="다른 제품 추가"><option value="">+ 다른 제품도 샀어요</option>${others.map((p) => `<option value="${esc(p.id)}">${esc(productLabel(p))}</option>`).join("")}</select>
+    <div class="sheet-actions"><button type="button" class="btn-secondary" data-close-sheet>취소</button><button type="submit" class="btn-primary">추가하기</button></div>`;
+  sheet.scrollTop = scroll;
+}
+
+function handleRestockClick(e) {
+  if (!restock || !e.target.closest("#restockForm")) return false;
+  const t = e.target.closest("[data-rs-step]");
+  if (!t) return false;
+  const row = restock.rows[parseInt(t.closest(".rs-row").dataset.rs, 10)];
+  row.n = Math.max(0, row.n + parseInt(t.dataset.rsStep, 10));
+  renderRestock();
+  return true;
+}
+
+function handleRestockChange(t) {
+  if (!restock || !t.closest("#restockForm")) return false;
+  if (t.id === "rsAdd" && t.value) {
+    restock.rows.push({ pid: t.value, n: 1, per: productById(t.value)?.count || 30 });
+    renderRestock();
+    return true;
+  }
+  if (t.matches("[data-rs-per]")) {
+    restock.rows[parseInt(t.closest(".rs-row").dataset.rs, 10)].per = Math.max(1, parseInt(t.value, 10) || 1);
+    renderRestock();
+    return true;
+  }
+  return false;
+}
+
+async function saveRestock() {
+  const today = epochDay();
+  const stock = { ...(state.cycle.stock || {}) };
+  let bottles = 0;
+  for (const r of restock.rows) {
+    if (!r.n) continue;
+    stock[r.pid] = { count: restockLeft(r.pid) + r.n * Math.max(1, r.per), day: today };
+    bottles += r.n;
+  }
+  if (!bottles) { toast("산 통 수를 + 버튼으로 올려주세요."); return; }
+  try {
+    await updateDoc(doc(db, "users", state.user.uid, "meta", "cycle"), { stock });
+    restock = null;
+    closeSheet();
+    toast(`${bottles}통을 추가했어요.`);
+  } catch (e) { fail(e); }
+}
+
+// ----- running low (내 정보) -----
+const LOW_STOCK = 10;
+
+function lowStockList() {
+  const out = new Map();
+  const cy = state.cycle;
+  const today = epochDay();
+  if (cy) {
+    const use = dailyUse(allItems(cy));
+    for (const pid of new Set(allItems(cy).map((it) => it.productId))) {
+      const left = remaining((cy.stock || {})[pid], use[pid], today);
+      if (left !== null && left < LOW_STOCK) out.set(pid, { pid, left, perDay: use[pid], from: "유산균" });
+    }
+  }
+  for (const it of state.items) {
+    if (typeof it.stockCount !== "number" || it.stockCount >= LOW_STOCK) continue;
+    const key = it.productId || "item:" + it.id;
+    const prev = out.get(key);
+    if (!prev || it.stockCount < prev.left) {
+      out.set(key, { pid: it.productId || null, name: it.name, photo: it.photo, url: it.url, left: it.stockCount, perDay: 1, from: "오늘" });
+    }
+  }
+  return [...out.values()].sort((a, b) => a.left - b.left);
+}
+
+function renderLowStock() {
+  const list = lowStockList();
+  $("#lowCount").textContent = list.length ? `${list.length}개` : "";
+  $("#lowStock").innerHTML = list.length ? list.map((x) => {
+    const p = x.pid ? productById(x.pid) : null;
+    const name = p ? p.name : x.name;
+    const photo = p && isSafePhoto(p.photo) ? p.photo : (isSafePhoto(x.photo) ? x.photo : null);
+    const url = p ? safeIherbUrl(p.url, productLabel(p)) : safeIherbUrl(x.url, x.name);
+    const days = x.perDay ? Math.floor(x.left / x.perDay) : null;
+    return `<div class="low-row">
+      <div class="cy-prod">${thumbHtml(name, photo, "opt-photo")}
+        <span class="opt-text">${p && p.brand ? `<span class="opt-brand">${esc(p.brand)}</span>` : ""}<span class="opt-name">${esc(name)}</span></span>
+        <span class="low-left${x.left <= 0 ? " out" : ""}">${x.left <= 0 ? "다 떨어짐" : `${x.left}개 남음`}${x.left > 0 && days !== null ? `<br><small>약 ${days}일 치</small>` : ""}</span></div>
+      <a class="iherb-link low-link" href="${esc(url)}" target="_blank" rel="noopener">아이허브에서 주문하기 →</a>
+    </div>`;
+  }).join("") : `<p class="mc-note">10개 미만으로 남은 제품이 없어요.</p>`;
+}
+
 // ---------- me ----------
 function renderMe() {
   const u = state.user;
@@ -747,6 +873,7 @@ function renderMe() {
   const noAdmin = state.adminUids !== null && state.adminUids.length === 0;
   $("#meRole").textContent = admin ? "관리자 — 공용 제품 목록을 수정할 수 있어요" : "사용자 — 공용 목록을 보고 내 스케줄에 담을 수 있어요";
   $("#claimAdmin").hidden = !noAdmin;
+  renderLowStock();
   const notify = localStorage.getItem("notify") === "1" && "Notification" in window && Notification.permission === "granted";
   $("#notifyBtn").textContent = notify ? "알림 끄기" : "알림 켜기";
   $("#notifyState").textContent = notify ? "켜짐 — 이 앱이 열려 있는 동안 복용 시간에 알려드려요." : "꺼짐";
@@ -780,6 +907,7 @@ function openSheet(title, html) {
 }
 function closeSheet() {
   draftPlan = null;
+  restock = null;
   setup = null;
   $("#scrim").hidden = true;
   $("#sheetBody").innerHTML = "";
@@ -1079,6 +1207,7 @@ function subscribe(uid) {
     state.cycle = s.exists() ? s.data() : null;
     state.cycleLoaded = true;
     renderRotation();
+    if (state.user) renderMe();
   }, fail));
 }
 function unsubscribeAll() {
@@ -1124,8 +1253,8 @@ function wire() {
   });
 
   document.addEventListener("click", (e) => {
-    if (handleEditorClick(e) || handleSetupClick(e)) return;
-    const t = e.target.closest("[data-take],[data-skip],[data-undo],[data-edit-item],[data-adopt],[data-edit-product],[data-close-sheet],[data-delete-item],[data-delete-product],[data-photo-clear],[data-import-remove],.day-chip,#importParse,#importSave,#rotEdit,#rotStart,#cyStock,#cyNext,#cyReset,#cyConfirm");
+    if (handleEditorClick(e) || handleSetupClick(e) || handleRestockClick(e)) return;
+    const t = e.target.closest("[data-take],[data-skip],[data-undo],[data-edit-item],[data-adopt],[data-edit-product],[data-close-sheet],[data-delete-item],[data-delete-product],[data-photo-clear],[data-import-remove],.day-chip,#importParse,#importSave,#rotEdit,#rotStart,#cyStock,#cyNext,#cyReset,#cyConfirm,[data-restock]");
     if (!t) return;
     if (t.dataset.take) setStatus(t.dataset.take, "TAKEN");
     else if (t.dataset.skip) setStatus(t.dataset.skip, "SKIPPED");
@@ -1155,6 +1284,7 @@ function wire() {
     else if (t.id === "rotEdit") openRotationEditor();
     else if (t.id === "rotStart") startFirstCycle();
     else if (t.id === "cyStock") openStockSheet();
+    else if ("restock" in t.dataset) openRestockSheet();
     else if (t.id === "cyNext") openCycleSetup(nextCycle(state.plan, state.cycle).methodIndex);
     else if (t.id === "cyReset") resetCycle();
     else if (t.id === "cyConfirm") confirmCycle();
@@ -1166,11 +1296,12 @@ function wire() {
     else if (e.target.id === "productForm") saveProductForm(e.target);
     else if (e.target.id === "planForm") savePlan();
     else if (e.target.id === "stockForm") saveStock(e.target);
+    else if (e.target.id === "restockForm") saveRestock();
   });
 
   document.addEventListener("change", (e) => {
     const t = e.target;
-    if (handleEditorChange(t)) return;
+    if (handleEditorChange(t) || handleRestockChange(t)) return;
     if (t.matches("[data-photo-input]")) {
       handlePhotoInput(t, (data) => {
         sheetPhoto = data;

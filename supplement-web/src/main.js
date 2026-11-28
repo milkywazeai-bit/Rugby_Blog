@@ -11,7 +11,7 @@ import { vapidPublicKey } from "./config.js";
 import { parseShot, photoRect, matchProduct } from "./shot.js";
 import {
   defaultPlan, validPlan, methodIndexOf, nextCycle, dailyUse, remaining, cycleStatus, itemsFromPicks, defaultPicks,
-  slotOptions, baseSlots, baseItemsFromPicks, defaultBasePicks, planProductIds, pastPicks
+  slotOptions, baseSlots, baseItemsFromPicks, defaultBasePicks, planProductIds, pastPicks, mealPlanOf, itemsFromMealPlan
 } from "./rotation.js";
 import {
   dayEntries, dailyUseAll, daysLeft, productsInUse, MEALS, mealTimes, mealLabel, extraMeal, extraMeals, historyGroups, extraAmount, autoTakeList
@@ -462,9 +462,9 @@ function itemRows(items, use) {
 }
 
 function mealSections(items, use, stock, today) {
-  return ["lunch", "dinner"].map((meal) => {
-    const list = items.filter((it) => it.meal === meal);
-    return list.length ? `<div class="meal"><div class="meal-head">${MEAL_NAMES[meal]} 먹고</div>${itemRows(list, use)}</div>` : "";
+  return MEALS.map(({ key, label }) => {
+    const list = items.filter((it) => it.meal === key);
+    return list.length ? `<div class="meal"><div class="meal-head">${label} 먹고</div>${itemRows(list, use)}</div>` : "";
   }).join("") || `<p class="mc-note">없음</p>`;
 }
 
@@ -501,14 +501,14 @@ function renderRotation() {
     <div class="mc-title">${esc(cur.title)}${cur.subtitle ? ` <span class="mc-sub">${esc(cur.subtitle)}</span>` : ""}</div>
     ${ending}
     ${mealSections(cycle.items || [], use, cycle.stock, today)}
-    <div class="cy-actions"><button class="btn-small" data-restock="" type="button">새 통 추가</button><button class="btn-small" id="cyStock" type="button">보유 개수 수정</button>
+    <div class="cy-actions"><button class="btn-small" data-restock="" type="button">새 통 추가</button><button class="btn-small" id="cyStock" type="button">보유 개수 수정</button><button class="btn-small" data-meal-edit="cycle" type="button">먹는 방법</button>
       ${plan ? `<button class="btn-small primary" id="cyNext" type="button">다음 사이클 시작</button>` : ""}</div>
   </div>
   ${base && (base.items || []).length ? `<div class="month-card base">
     <div class="mc-when">계속 먹는 기본 구성 <span class="cy-days">${fmtDay(base.startDay)}부터 · ${today - base.startDay + 1}일째</span></div>
     <div class="mc-title">${esc(base.title || "4번 사이클")}${base.subtitle ? ` <span class="mc-sub">${esc(base.subtitle)}</span>` : ""}</div>
     ${mealSections(base.items, use, cycle.stock, today)}
-    <div class="cy-actions"><button class="btn-small" data-restock="" type="button">새 통 추가</button></div>
+    <div class="cy-actions"><button class="btn-small" data-restock="" type="button">새 통 추가</button><button class="btn-small" data-meal-edit="base" type="button">먹는 방법</button></div>
   </div>` : ""}`;
   if (plan) {
     const n = nextCycle(plan, cycle);
@@ -522,6 +522,87 @@ function renderRotation() {
   } else {
     $("#rotNext").innerHTML = "";
   }
+}
+
+// ----- 먹는 방법 (per person): which meals and how many, for the cycle or the 4번 set -----
+let mealEdit = null;
+
+function mealEditSource(part) {
+  const c = state.cycle;
+  return part === "base"
+    ? { items: (c.base && c.base.items) || [], def: c.base && c.base.itemsDefault }
+    : { items: c.items || [], def: c.itemsDefault };
+}
+
+function openMealEdit(part) {
+  if (!state.cycle) return;
+  const src = mealEditSource(part);
+  mealEdit = { part, rows: mealPlanOf(src.items).map((r) => ({ ...r, meals: [...r.meals] })) };
+  openSheet(part === "base" ? "4번 먹는 방법" : "사이클 먹는 방법", `<div id="mealEdit"></div>`);
+  renderMealEdit();
+}
+
+function renderMealEdit() {
+  const box = $("#mealEdit");
+  if (!box || !mealEdit) return;
+  const src = mealEditSource(mealEdit.part);
+  box.innerHTML = `<p class="hint">제품마다 언제, 한 번에 몇 개씩 먹을지 정해요. <strong>나만</strong> 바뀌고 다른 사람은 관리자 기본값 그대로예요.</p>
+    ${mealEdit.rows.map((r, i) => `<div class="set-edit-row">
+      ${productRow(r.productId)}
+      <div class="set-edit-fields">
+        <div class="meal-pick small">${MEALS.map((m) => `<button type="button" class="set-meal ${r.meals.includes(m.key) ? "on" : ""}" data-me-meal="${i}" data-meal="${m.key}" aria-pressed="${r.meals.includes(m.key)}">${m.label}</button>`).join("")}</div>
+        <label class="mini">한 번에 <input type="number" min="0.5" step="0.5" inputmode="decimal" data-me-dose="${i}" value="${esc(r.dose)}"> ${esc((r.amount || "").replace(/\d+(?:\.\d+)?/, "").trim() || unitOf(r.productId))}</label>
+      </div>
+    </div>`).join("")}
+    <div class="me-quick">
+      <button type="button" class="btn-small" data-me-all="dinner">전부 저녁 한 번으로</button>
+      <button type="button" class="btn-small" data-me-all="lunch">전부 점심 한 번으로</button>
+      ${src.def ? `<button type="button" class="btn-small" data-me-reset>기본값으로 되돌리기</button>` : ""}
+    </div>
+    <div class="sheet-actions"><button type="button" class="btn-secondary" data-close-sheet>취소</button><button type="button" class="btn-primary" id="mealEditSave">저장</button></div>`;
+}
+
+function handleMealEditClick(e) {
+  if (!mealEdit) return false;
+  const t = e.target.closest("[data-me-meal],[data-me-all],[data-me-reset],#mealEditSave");
+  if (!t) return false;
+  if (t.dataset.meMeal) {
+    const r = mealEdit.rows[parseInt(t.dataset.meMeal, 10)];
+    const on = r.meals.includes(t.dataset.meal);
+    if (on && r.meals.length === 1) { toast("끼니를 하나 이상 골라주세요. 안 먹을 거면 사이클 설정에서 빼주세요."); return true; }
+    r.meals = on ? r.meals.filter((m) => m !== t.dataset.meal) : [...r.meals, t.dataset.meal];
+    renderMealEdit();
+  } else if (t.dataset.meAll) {
+    mealEdit.rows.forEach((r) => { r.meals = [t.dataset.meAll]; });
+    renderMealEdit();
+  } else if ("meReset" in t.dataset) {
+    const src = mealEditSource(mealEdit.part);
+    mealEdit.rows = mealPlanOf(src.def).map((r) => ({ ...r, meals: [...r.meals] }));
+    renderMealEdit();
+    toast("기본값으로 돌려놨어요. 저장을 눌러야 적용돼요.");
+  } else if (t.id === "mealEditSave") saveMealEdit();
+  return true;
+}
+
+function handleMealEditInput(t) {
+  if (!mealEdit || !t.dataset || t.dataset.meDose === undefined) return false;
+  mealEdit.rows[parseInt(t.dataset.meDose, 10)].dose = parseFloat(t.value) || 1;
+  return true;
+}
+
+async function saveMealEdit() {
+  const c = state.cycle;
+  const items = itemsFromMealPlan(mealEdit.rows);
+  const ref = doc(db, "users", state.user.uid, "meta", "cycle");
+  try {
+    if (mealEdit.part === "base") {
+      await updateDoc(ref, { "base.items": items, "base.itemsDefault": c.base.itemsDefault || c.base.items, updatedAt: serverTimestamp() });
+    } else {
+      await updateDoc(ref, { items, itemsDefault: c.itemsDefault || c.items, updatedAt: serverTimestamp() });
+    }
+    closeSheet();
+    toast("먹는 방법을 바꿨어요. 오늘 탭과 재고 계산에 바로 반영돼요.");
+  } catch (e) { fail(e); }
 }
 
 // ----- start / next cycle sheet -----
@@ -1872,6 +1953,7 @@ function openSheet(title, html) {
 }
 let skipPop = 0;
 function closeSheet() {
+  mealEdit = null;
   // Closed by a button (not the back key): drop the sheet's history entry too.
   if (!$("#scrim").hidden && history.state && history.state.sheet) { skipPop++; history.back(); }
   draftPlan = null;
@@ -2428,7 +2510,9 @@ function wire() {
   }, true);
 
   document.addEventListener("click", (e) => {
-    if (handleEditorClick(e) || handleSetupClick(e) || handleRestockClick(e) || handleSetClick(e)) return;
+    if (handleEditorClick(e) || handleSetupClick(e) || handleRestockClick(e) || handleSetClick(e) || handleMealEditClick(e)) return;
+    const me = e.target.closest("[data-meal-edit]");
+    if (me) { openMealEdit(me.dataset.mealEdit); return; }
     const t = e.target.closest(".meal-chip,[data-take-all],[data-take-section],#autoToggle,#autoSet,[data-take],[data-skip],[data-undo],[data-edit-item],[data-adopt],[data-edit-product],[data-close-sheet],[data-delete-item],[data-delete-product],[data-photo-clear],[data-import-remove],.day-chip,#importParse,#importSave,#rotEdit,#rotStart,#cyStock,#cyNext,#cyReset,#cyConfirm,[data-restock],[data-goto],[data-pick-product],[data-inv-edit],[data-inv-delete],[data-reset-open],#resetConfirm");
     if (!t) return;
     if (t.classList.contains("meal-chip")) {
@@ -2508,7 +2592,7 @@ function wire() {
 
   document.addEventListener("input", (e) => {
     const t = e.target;
-    if (handleEditorInput(t) || handleSetInput(t)) return;
+    if (handleEditorInput(t) || handleSetInput(t) || handleMealEditInput(t)) return;
     if (t.id === "pickSearch") renderProductPicker(t.value);
     else if (t.dataset.imp) {
       const row = importRows[parseInt(t.closest(".import-row").dataset.index, 10)];

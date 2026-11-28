@@ -434,3 +434,6 @@ details[open] > summary .fold-icon{transform:rotate(-135deg) translateY(-1px)}
 .nick-row label{font-size:.84rem;font-weight:600;color:var(--ink-muted);flex-shrink:0}
 .nick-row input{flex:1;min-width:0;font:inherit;border:1px solid var(--border);border-radius:12px;padding:8px 12px;background:var(--surface-2);color:var(--ink)}
 .nick-hint{margin:4px 0 0}
+
+/* 먹는 방법 */
+.me-quick{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 4px}

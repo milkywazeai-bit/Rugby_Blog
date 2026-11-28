@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   defaultPlan, validPlan, nextCycle, dailyUse, remaining, cycleStatus, itemsFromPicks, defaultPicks, perDose,
-  baseSlots, baseItemsFromPicks, defaultBasePicks, planProductIds, pastPicks
+  baseSlots, baseItemsFromPicks, defaultBasePicks, planProductIds, pastPicks, mealPlanOf, itemsFromMealPlan
 } from "../src/rotation.js";
 
 const plan = defaultPlan();
@@ -127,4 +127,21 @@ test("pastPicks: what earlier rounds of the same cycle type used", () => {
   const c3 = pastPicks(plan, cycle, 2);
   assert.deepEqual(c3.get("wish-33"), ["3-1"]);
   assert.equal(pastPicks(plan, null, 0).size, 0);
+});
+
+test("먹는 방법: group items by product and rebuild them with new meals and dose", () => {
+  const items = [
+    { meal: "lunch", label: "부티르산", amount: "1캡슐", productId: "but" },
+    { meal: "dinner", label: "부티르산", amount: "1캡슐", productId: "but" },
+    { meal: "dinner", label: "비타민", amount: "1캡슐", productId: "vit" },
+    { meal: "lunch", label: "세트", amount: "각 1캡슐", productId: "a" }
+  ];
+  const rows = mealPlanOf(items);
+  assert.deepEqual(rows.map((r) => [r.productId, r.meals.join("+"), r.dose]), [["but", "lunch+dinner", 1], ["vit", "dinner", 1], ["a", "lunch", 1]]);
+  rows[0].meals = ["dinner"];
+  rows[1].meals = ["morning", "dinner"]; rows[1].dose = 2;
+  const back = itemsFromMealPlan(rows);
+  assert.deepEqual(back.map((i) => `${i.productId}:${i.meal}:${i.amount}`), ["but:dinner:1캡슐", "vit:morning:2캡슐", "vit:dinner:2캡슐", "a:lunch:각 1캡슐"]);
+  assert.equal(dailyUse(back).vit, 4);
+  assert.equal(dailyUse(back).but, 1);
 });

@@ -191,3 +191,35 @@ export function defaultPicks(method, carryOver = []) {
   }
   return picks;
 }
+
+// ----- per-person "먹는 방법" for cycle / 4번 items -----
+// Items hold one row per product per meal. For editing they are grouped by
+// product: which meals, and how many each time (the number inside `amount`).
+const MEAL_ORDER = ["morning", "lunch", "dinner"];
+
+export function mealPlanOf(items) {
+  const rows = [];
+  for (const it of items || []) {
+    if (!it.productId) continue;
+    let r = rows.find((x) => x.productId === it.productId);
+    if (!r) {
+      r = { productId: it.productId, label: it.label || "", amount: it.amount || "", dose: perDose(it.amount), meals: [] };
+      rows.push(r);
+    }
+    if (!r.meals.includes(it.meal)) r.meals.push(it.meal);
+  }
+  rows.forEach((r) => r.meals.sort((a, b) => MEAL_ORDER.indexOf(a) - MEAL_ORDER.indexOf(b)));
+  return rows;
+}
+
+export function itemsFromMealPlan(rows) {
+  const out = [];
+  for (const r of rows) {
+    const dose = Number(r.dose) > 0 ? Number(r.dose) : 1;
+    const amount = /\d/.test(r.amount || "") ? r.amount.replace(/\d+(?:\.\d+)?/, String(dose)) : `${dose}${r.amount || "개"}`;
+    for (const meal of MEAL_ORDER) {
+      if (r.meals.includes(meal)) out.push({ meal, label: r.label, amount, productId: r.productId });
+    }
+  }
+  return out;
+}

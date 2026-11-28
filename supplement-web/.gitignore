@@ -1,0 +1,7 @@
+node_modules/
+public/app.js
+*.log
+.firebase/
+service-account*.json
+public/ocr/
+public/fonts/

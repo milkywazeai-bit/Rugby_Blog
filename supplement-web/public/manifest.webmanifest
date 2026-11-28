@@ -1,0 +1,16 @@
+{
+  "name": "Vitaday",
+  "short_name": "Vitaday",
+  "description": "Vitaday — 영양제 복용 일정, 재고, 유산균 사이클 관리",
+  "lang": "ko",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#EEF3ED",
+  "theme_color": "#2F6F4F",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

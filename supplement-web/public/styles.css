@@ -406,3 +406,9 @@ body{letter-spacing:-.011em;font-variant-numeric:tabular-nums}
 .inv-count{font-weight:700;letter-spacing:-.03em}
 .tab-btn span{letter-spacing:-.02em}
 .inv-del{color:var(--danger);border-color:transparent;background:transparent}
+
+/* 초기화 */
+.danger-box{border:1px solid var(--danger);background:var(--danger-soft);border-radius:14px;padding:14px;margin:4px 0 8px}
+.danger-box p{margin:0 0 6px;font-size:.92rem}
+.danger-title{font-weight:700;color:var(--danger)}
+.btn-danger{flex:1;border:none;background:var(--danger);color:#fff;font-weight:700;border-radius:var(--radius-pill);padding:12px 16px}

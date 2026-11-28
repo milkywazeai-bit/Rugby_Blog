@@ -1011,6 +1011,63 @@ async function saveRestock() {
   } catch (e) { fail(e); }
 }
 
+// ---------- 초기화 (with a warning first) ----------
+function openResetSheet(kind) {
+  const fam = state.family;
+  const texts = {
+    extras: {
+      title: "추가 영양제 초기화",
+      body: `등록한 추가 영양제 <strong>${state.items.length}개를 모두 지워요.</strong> 오늘 탭에서도 사라지고, 되돌릴 수 없어요.`,
+      keep: "재고 개수와 지금까지의 히스토리는 그대로 남아요.",
+      button: "추가 영양제 모두 지우기"
+    },
+    inventory: {
+      title: "재고 초기화",
+      body: fam
+        ? `<strong>${esc(fam.name || "Family")} 재고 ${Object.keys(state.inventory).length}개 제품의 개수를 모두 지워요.</strong> Family 모두의 재고가 함께 비워지고, 되돌릴 수 없어요.`
+        : `재고 <strong>${Object.keys(state.inventory).length}개 제품의 개수를 모두 지워요.</strong> 되돌릴 수 없어요.`,
+      keep: "먹고 있는 제품은 목록에 남고 개수만 비워져요. 사이클·추가 영양제·히스토리는 그대로예요.",
+      button: "재고 모두 지우기"
+    },
+    today: {
+      title: "오늘 기록 초기화",
+      body: "오늘 누른 <strong>완료·건너뛰기를 모두 지워요.</strong> 완료로 빠졌던 재고는 다시 채워 넣어요.",
+      keep: "하나만 취소하려면 오늘 탭에서 그 항목의 \"완료 ✓\"를 누르면 돼요.",
+      button: "오늘 기록 모두 지우기"
+    }
+  }[kind];
+  openSheet(texts.title, `<div class="danger-box">
+      <p class="danger-title">⚠️ 정말 초기화할까요?</p>
+      <p>${texts.body}</p>
+      <p class="mc-note">${texts.keep}</p>
+    </div>
+    <div class="sheet-actions"><button type="button" class="btn-secondary" data-close-sheet>취소</button>
+      <button type="button" class="btn-danger" id="resetConfirm" data-reset="${kind}">${texts.button}</button></div>`);
+}
+
+async function runReset(kind) {
+  const uid = state.user.uid;
+  try {
+    if (kind === "today") {
+      const keys = todayEntries().filter((e) => e.status !== "PENDING").map((e) => e.key);
+      closeSheet();
+      if (keys.length) await setStatuses(keys, null);
+      toast("오늘 기록을 초기화했어요.");
+      return;
+    }
+    const refs = kind === "extras"
+      ? state.items.map((it) => doc(db, "users", uid, "items", it.id))
+      : Object.keys(state.inventory).map((pid) => invDoc(pid));
+    for (let i = 0; i < refs.length; i += 400) {
+      const batch = writeBatch(db);
+      refs.slice(i, i + 400).forEach((r) => batch.delete(r));
+      await batch.commit();
+    }
+    closeSheet();
+    toast(kind === "extras" ? "추가 영양제를 초기화했어요." : "재고를 초기화했어요.");
+  } catch (e) { fail(e); }
+}
+
 // ----- remove one product from 재고 -----
 async function deleteInventory(pid) {
   const p = productById(pid);
@@ -1723,6 +1780,9 @@ function renderAll() {
   renderSetOffers();
   renderInventory();
   renderFamilyToday();
+  $("#resetExtras").hidden = !state.items.length;
+  $("#resetInventory").hidden = !Object.keys(state.inventory).length;
+  $("#resetToday").hidden = !todayEntries().some((e) => e.status !== "PENDING");
   $("#invHint").textContent = state.family
     ? `${state.family.name || "Family"} 재고예요. Family 누가 완료를 눌러도 같이 줄어들어요. 새로 산 통은 "새 통 추가"로 더하세요.`
     : `오늘 탭에서 완료를 누르면 그만큼 줄어들어요. 새로 산 통은 "새 통 추가"로 더하세요.`;
@@ -2230,7 +2290,7 @@ function wire() {
 
   document.addEventListener("click", (e) => {
     if (handleEditorClick(e) || handleSetupClick(e) || handleRestockClick(e) || handleSetClick(e)) return;
-    const t = e.target.closest(".meal-chip,[data-take-all],[data-take-section],#autoToggle,#autoSet,[data-take],[data-skip],[data-undo],[data-edit-item],[data-adopt],[data-edit-product],[data-close-sheet],[data-delete-item],[data-delete-product],[data-photo-clear],[data-import-remove],.day-chip,#importParse,#importSave,#rotEdit,#rotStart,#cyStock,#cyNext,#cyReset,#cyConfirm,[data-restock],[data-goto],[data-pick-product],[data-inv-edit],[data-inv-delete]");
+    const t = e.target.closest(".meal-chip,[data-take-all],[data-take-section],#autoToggle,#autoSet,[data-take],[data-skip],[data-undo],[data-edit-item],[data-adopt],[data-edit-product],[data-close-sheet],[data-delete-item],[data-delete-product],[data-photo-clear],[data-import-remove],.day-chip,#importParse,#importSave,#rotEdit,#rotStart,#cyStock,#cyNext,#cyReset,#cyConfirm,[data-restock],[data-goto],[data-pick-product],[data-inv-edit],[data-inv-delete],[data-reset-open],#resetConfirm");
     if (!t) return;
     if (t.classList.contains("meal-chip")) {
       t.classList.toggle("on");
@@ -2272,6 +2332,8 @@ function wire() {
     else if (t.dataset.pickProduct) openItemSheet(null, t.dataset.pickProduct);
     else if (t.dataset.invEdit) openInventoryEdit([t.dataset.invEdit]);
     else if (t.dataset.invDelete) deleteInventory(t.dataset.invDelete);
+    else if (t.dataset.resetOpen) openResetSheet(t.dataset.resetOpen);
+    else if (t.id === "resetConfirm") runReset(t.dataset.reset);
     else if (t.id === "cyNext") openCycleSetup(nextCycle(state.plan, state.cycle).methodIndex);
     else if (t.id === "cyReset") resetCycle();
     else if (t.id === "cyConfirm") confirmCycle();

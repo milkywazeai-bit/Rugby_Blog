@@ -919,6 +919,7 @@ function renderInventory() {
       <div class="inv-meta">${r.tags.map((t) => `<span class="chip kind ${t}">${WHERE_TAG[t]}</span>`).join("")}<span class="inv-sub${low ? " low" : ""}">${esc(sub)}</span></div>
       <div class="inv-actions">
         ${p ? `<a class="iherb-link" href="${esc(safeIherbUrl(p.url, productLabel(p)))}" target="_blank" rel="noopener">아이허브</a>` : ""}
+        <button type="button" class="btn-small inv-del" data-inv-delete="${esc(r.pid)}" aria-label="재고에서 삭제">삭제</button>
         <button type="button" class="btn-small" data-inv-edit="${esc(r.pid)}">개수 수정</button>
         <button type="button" class="btn-small primary" data-restock="${esc(r.pid)}">+ 새 통</button>
       </div>
@@ -1007,6 +1008,21 @@ async function saveRestock() {
     restock = null;
     closeSheet();
     toast(`${bottles}통을 재고에 추가했어요.`);
+  } catch (e) { fail(e); }
+}
+
+// ----- remove one product from 재고 -----
+async function deleteInventory(pid) {
+  const p = productById(pid);
+  const name = p ? p.name : "이 제품";
+  const inUse = productsInUse({ cycle: state.cycle, extras: state.items }).has(pid);
+  const msg = inUse
+    ? `${name}을(를) 재고에서 지울까요?\n지금 먹고 있는 제품이라 목록에는 남고, 개수만 비워져요.`
+    : `${name}을(를) 재고에서 지울까요?`;
+  if (!confirm(msg)) return;
+  try {
+    await deleteDoc(invDoc(pid));
+    toast(`${name}을(를) 재고에서 지웠어요.`);
   } catch (e) { fail(e); }
 }
 
@@ -2214,7 +2230,7 @@ function wire() {
 
   document.addEventListener("click", (e) => {
     if (handleEditorClick(e) || handleSetupClick(e) || handleRestockClick(e) || handleSetClick(e)) return;
-    const t = e.target.closest(".meal-chip,[data-take-all],[data-take-section],#autoToggle,#autoSet,[data-take],[data-skip],[data-undo],[data-edit-item],[data-adopt],[data-edit-product],[data-close-sheet],[data-delete-item],[data-delete-product],[data-photo-clear],[data-import-remove],.day-chip,#importParse,#importSave,#rotEdit,#rotStart,#cyStock,#cyNext,#cyReset,#cyConfirm,[data-restock],[data-goto],[data-pick-product],[data-inv-edit]");
+    const t = e.target.closest(".meal-chip,[data-take-all],[data-take-section],#autoToggle,#autoSet,[data-take],[data-skip],[data-undo],[data-edit-item],[data-adopt],[data-edit-product],[data-close-sheet],[data-delete-item],[data-delete-product],[data-photo-clear],[data-import-remove],.day-chip,#importParse,#importSave,#rotEdit,#rotStart,#cyStock,#cyNext,#cyReset,#cyConfirm,[data-restock],[data-goto],[data-pick-product],[data-inv-edit],[data-inv-delete]");
     if (!t) return;
     if (t.classList.contains("meal-chip")) {
       t.classList.toggle("on");
@@ -2255,6 +2271,7 @@ function wire() {
     else if (t.dataset.goto) switchTab(t.dataset.goto);
     else if (t.dataset.pickProduct) openItemSheet(null, t.dataset.pickProduct);
     else if (t.dataset.invEdit) openInventoryEdit([t.dataset.invEdit]);
+    else if (t.dataset.invDelete) deleteInventory(t.dataset.invDelete);
     else if (t.id === "cyNext") openCycleSetup(nextCycle(state.plan, state.cycle).methodIndex);
     else if (t.id === "cyReset") resetCycle();
     else if (t.id === "cyConfirm") confirmCycle();

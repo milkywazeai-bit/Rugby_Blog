@@ -405,3 +405,4 @@ body{letter-spacing:-.011em;font-variant-numeric:tabular-nums}
 .ring-pct{font-weight:700;letter-spacing:-.03em}
 .inv-count{font-weight:700;letter-spacing:-.03em}
 .tab-btn span{letter-spacing:-.02em}
+.inv-del{color:var(--danger);border-color:transparent;background:transparent}

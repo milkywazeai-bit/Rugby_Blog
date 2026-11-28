@@ -439,3 +439,5 @@ details[open] > summary .fold-icon{transform:rotate(-135deg) translateY(-1px)}
 .me-quick{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 4px}
 .set-edit-row.skipped{opacity:.6;border-style:dashed}
 .set-edit-row.skipped .mc-note{margin:6px 2px 0}
+.me-choices{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px}
+.me-choices .mini{margin-right:2px}

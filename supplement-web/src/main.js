@@ -11,7 +11,7 @@ import { vapidPublicKey } from "./config.js";
 import { parseShot, photoRect, matchProduct } from "./shot.js";
 import {
   defaultPlan, validPlan, methodIndexOf, nextCycle, dailyUse, remaining, cycleStatus, itemsFromPicks, defaultPicks,
-  slotOptions, baseSlots, baseItemsFromPicks, defaultBasePicks, planProductIds, pastPicks, mealPlanOf, itemsFromMealPlan
+  slotOptions, baseSlots, baseItemsFromPicks, defaultBasePicks, planProductIds, pastPicks, mealPlanOf, itemsFromMealPlan, perDose
 } from "./rotation.js";
 import {
   dayEntries, dailyUseAll, daysLeft, productsInUse, MEALS, mealTimes, mealLabel, extraMeal, extraMeals, historyGroups, extraAmount, autoTakeList
@@ -539,20 +539,40 @@ function mealEditSource(part) {
 function openMealEdit(part) {
   if (!state.cycle) return;
   const src = mealEditSource(part);
-  // Every product of the admin default is listed; ones no longer in my items show as 빠짐.
-  const current = mealPlanOf(src.items);
-  const all = mealPlanOf(src.def || src.items);
-  for (const r of current) if (!all.some((a) => a.productId === r.productId)) all.push(r);
-  mealEdit = {
-    part,
-    rows: all.map((d) => {
-      const cur = current.find((r) => r.productId === d.productId);
-      const r = cur || d;
-      return { ...r, meals: [...r.meals], skip: !cur };
-    })
-  };
+  const slots = mealEditSlots(part);
+  const slotIdx = (pid) => slots.findIndex((s) => slotOptions(s).some((ids) => ids.includes(pid)));
+  const sameSlot = (a, b) => a === b || (slotIdx(a) !== -1 && slotIdx(a) === slotIdx(b));
+  // What I take now, then products of the default I dropped (빠짐), then — for 사이클 4 —
+  // any slot of the plan I left out when starting, so everything can be put back.
+  const rows = mealPlanOf(src.items).map((r) => ({ ...r, meals: [...r.meals], skip: false }));
+  for (const d of mealPlanOf(src.def || [])) {
+    if (!rows.some((r) => sameSlot(r.productId, d.productId))) rows.push({ ...d, meals: [...d.meals], skip: true });
+  }
+  if (part === "base") {
+    slots.forEach((slot) => {
+      const opts = slotOptions(slot);
+      if (!opts.length || rows.some((r) => opts.some((ids) => ids.includes(r.productId)))) return;
+      rows.push({ productId: opts[0][0], label: slot.label || "", amount: slot.amount || "1개", dose: perDose(slot.amount),
+        meals: slot.meals && slot.meals.length ? [...slot.meals] : ["lunch"], skip: true });
+    });
+  }
+  // A slot with several single-product options (칼마부티르산 / 트리부티린): pick one right here.
+  rows.forEach((r) => {
+    const i = slotIdx(r.productId);
+    const opts = i === -1 ? [] : slotOptions(slots[i]);
+    r.choices = opts.length > 1 && opts.every((ids) => ids.length === 1) ? opts.map((ids) => ids[0]) : null;
+  });
+  mealEdit = { part, rows };
   openSheet(part === "base" ? "사이클 4 먹는 방법" : "사이클 먹는 방법", `<div id="mealEdit"></div>`);
   renderMealEdit();
+}
+
+function mealEditSlots(part) {
+  const plan = state.plan;
+  if (!plan) return [];
+  if (part === "base") return baseSlots(plan);
+  const m = plan.methods.find((x) => x.id === state.cycle.methodId);
+  return m ? [...m.lunch, ...m.dinner] : [];
 }
 
 function renderMealEdit() {
@@ -562,6 +582,10 @@ function renderMealEdit() {
   box.innerHTML = `<p class="hint">제품마다 언제, 한 번에 몇 개씩 먹을지 정해요. <strong>나만</strong> 바뀌고 다른 사람은 관리자 기본값 그대로예요.</p>
     ${mealEdit.rows.map((r, i) => `<div class="set-edit-row${r.skip ? " skipped" : ""}">
       <div class="set-line">${productRow(r.productId)}<button type="button" class="btn-small${r.skip ? " primary" : ""}" data-me-skip="${i}">${r.skip ? "다시 넣기" : "빼기"}</button></div>
+      ${r.choices ? `<div class="me-choices"><span class="mini">${esc(r.label || "고르기")}</span>${r.choices.map((pid) => {
+        const p = productById(pid);
+        return `<button type="button" class="set-meal ${pid === r.productId ? "on" : ""}" data-me-pick="${i}" data-pid="${esc(pid)}" aria-pressed="${pid === r.productId}">${esc(p ? p.name : pid)}</button>`;
+      }).join("")}</div>` : ""}
       ${r.skip ? `<p class="mc-note">안 먹어요 — 오늘 탭·재고·알림에서 빠져요.</p>` : `<div class="set-edit-fields">
         <div class="meal-pick small">${MEALS.map((m) => `<button type="button" class="set-meal ${r.meals.includes(m.key) ? "on" : ""}" data-me-meal="${i}" data-meal="${m.key}" aria-pressed="${r.meals.includes(m.key)}">${m.label}</button>`).join("")}</div>
         <label class="mini">한 번에 <input type="number" min="0.5" step="0.5" inputmode="decimal" data-me-dose="${i}" value="${esc(r.dose)}"> ${esc((r.amount || "").replace(/\d+(?:\.\d+)?/, "").trim() || unitOf(r.productId))}</label>
@@ -577,9 +601,13 @@ function renderMealEdit() {
 
 function handleMealEditClick(e) {
   if (!mealEdit) return false;
-  const t = e.target.closest("[data-me-meal],[data-me-all],[data-me-reset],[data-me-skip],#mealEditSave");
+  const t = e.target.closest("[data-me-meal],[data-me-all],[data-me-reset],[data-me-skip],[data-me-pick],#mealEditSave");
   if (!t) return false;
-  if (t.dataset.meSkip) {
+  if (t.dataset.mePick) {
+    const r = mealEdit.rows[parseInt(t.dataset.mePick, 10)];
+    r.productId = t.dataset.pid;
+    renderMealEdit();
+  } else if (t.dataset.meSkip) {
     const r = mealEdit.rows[parseInt(t.dataset.meSkip, 10)];
     r.skip = !r.skip;
     renderMealEdit();
@@ -594,7 +622,8 @@ function handleMealEditClick(e) {
     renderMealEdit();
   } else if ("meReset" in t.dataset) {
     const src = mealEditSource(mealEdit.part);
-    mealEdit.rows = mealPlanOf(src.def).map((r) => ({ ...r, meals: [...r.meals], skip: false }));
+    const keepChoices = new Map(mealEdit.rows.map((r) => [r.productId, r.choices]));
+    mealEdit.rows = mealPlanOf(src.def).map((r) => ({ ...r, meals: [...r.meals], skip: false, choices: keepChoices.get(r.productId) || mealEdit.rows.find((x) => x.choices && x.choices.includes(r.productId))?.choices || null }));
     renderMealEdit();
     toast("기본값으로 돌려놨어요. 저장을 눌러야 적용돼요.");
   } else if (t.id === "mealEditSave") saveMealEdit();

@@ -876,7 +876,7 @@ async function savePlan() {
 // ---------- 재고 (inventory) ----------
 // users/{uid}/inventory/{productId}.count is the real count: set when a cycle or extra
 // is set up, raised by "새 통 추가", lowered by "완료" in 오늘.
-const WHERE_TAG = { cycle: "유산균 사이클", base: "4번", extra: "추가 영양제", family: "가족" };
+const WHERE_TAG = { cycle: "유산균 사이클", base: "4번", extra: "추가 영양제", family: "Family" };
 const LOW_DAYS = 10;
 
 function inventoryRows() {
@@ -1454,13 +1454,13 @@ function invDoc(pid) {
 
 function myName() {
   const u = state.user;
-  return (u.displayName || (u.email || "").split("@")[0] || "가족").slice(0, 20);
+  return (u.displayName || (u.email || "").split("@")[0] || "멤버").slice(0, 20);
 }
 
 function otherMembers() {
   if (!state.family) return [];
   return (state.family.members || []).filter((uid) => uid !== state.user.uid).map((uid) => ({
-    uid, name: (state.family.names || {})[uid] || "가족", status: state.familyStatus[uid] || null
+    uid, name: (state.family.names || {})[uid] || "멤버", status: state.familyStatus[uid] || null
   }));
 }
 
@@ -1531,7 +1531,7 @@ function renderFamilyToday() {
   const others = otherMembers();
   if (!others.length) { box.innerHTML = ""; return; }
   const today = epochDay();
-  box.innerHTML = `<h3 class="sub-head fam-head">가족 오늘</h3>` + others.map((m) => {
+  box.innerHTML = `<h3 class="sub-head fam-head">Family 오늘</h3>` + others.map((m) => {
     const st = m.status;
     if (!st || st.day !== today) {
       return `<div class="fam-card"><div class="fam-top"><strong>${esc(m.name)}</strong><span class="chip">오늘 기록 없음</span></div></div>`;
@@ -1553,18 +1553,18 @@ function renderFamily() {
   if (!state.familyLoaded) { box.innerHTML = `<p class="mc-note">불러오는 중이에요…</p>`; return; }
   const f = state.family;
   if (!f) {
-    box.innerHTML = `<div class="me-row"><strong>가족</strong></div>
-      <p class="hint">가족을 만들면 <strong>재고를 하나로 합쳐서</strong> 같이 써요. 누가 완료를 눌러도 같은 재고에서 빠지고, 오늘 탭에서 서로 먹었는지 볼 수 있어요. 먹는 스케줄은 각자 따로예요.</p>
-      <div class="fam-form"><input id="famName" maxlength="30" placeholder="가족 이름 (예: 우리 가족)" aria-label="가족 이름"><button type="button" class="btn-small primary" id="famCreate">가족 만들기</button></div>
+    box.innerHTML = `<div class="me-row"><strong>Family</strong></div>
+      <p class="hint">Family를 만들면 <strong>재고를 하나로 합쳐서</strong> 같이 써요. 누가 완료를 눌러도 같은 재고에서 빠지고, 오늘 탭에서 서로 먹었는지 볼 수 있어요. 먹는 스케줄은 각자 따로예요.</p>
+      <div class="fam-form"><input id="famName" maxlength="30" placeholder="Family 이름 (예: 우리집)" aria-label="Family 이름"><button type="button" class="btn-small primary" id="famCreate">Family 만들기</button></div>
       <div class="fam-form"><input id="famCode" maxlength="6" placeholder="초대 코드 6자리" aria-label="초대 코드" autocapitalize="characters" autocomplete="off"><button type="button" class="btn-small" id="famJoin">들어가기</button></div>`;
     return;
   }
   const names = f.names || {};
-  box.innerHTML = `<div class="me-row"><strong>가족 · ${esc(f.name || "우리 가족")}</strong><span class="chip">${(f.members || []).length}명</span></div>
-    <div class="fam-members">${(f.members || []).map((uid) => `<span class="chip ${uid === state.user.uid ? "taken" : ""}">${esc(names[uid] || "가족")}${uid === state.user.uid ? " (나)" : ""}</span>`).join("")}</div>
-    <p class="hint">가족 재고를 같이 써요. 아래 코드를 가족에게 알려주면 내 정보 → 가족에서 넣고 들어올 수 있어요.</p>
+  box.innerHTML = `<div class="me-row"><strong>Family · ${esc(f.name || "우리집")}</strong><span class="chip">${(f.members || []).length}명</span></div>
+    <div class="fam-members">${(f.members || []).map((uid) => `<span class="chip ${uid === state.user.uid ? "taken" : ""}">${esc(names[uid] || "멤버")}${uid === state.user.uid ? " (나)" : ""}</span>`).join("")}</div>
+    <p class="hint">Family 재고를 같이 써요. 아래 코드를 알려주면 내 정보 → Family에서 넣고 들어올 수 있어요.</p>
     <div class="fam-code"><span id="famCodeText">${esc(f.code || "")}</span><button type="button" class="btn-small" id="famCopy">코드 복사</button>${navigator.share ? `<button type="button" class="btn-small" id="famShare">공유</button>` : ""}</div>
-    <button type="button" class="btn-danger-text" id="famLeave">가족에서 나가기</button>`;
+    <button type="button" class="btn-danger-text" id="famLeave">Family에서 나가기</button>`;
 }
 
 function newCode() {
@@ -1589,7 +1589,7 @@ async function mergeMyInventory(fid) {
 }
 
 async function createFamily() {
-  const name = ($("#famName").value || "").trim() || "우리 가족";
+  const name = ($("#famName").value || "").trim() || "우리집";
   const uid = state.user.uid;
   try {
     const ref = doc(collection(db, "families"));
@@ -1599,7 +1599,7 @@ async function createFamily() {
     batch.set(doc(db, "familyCodes", code), { familyId: ref.id });
     await batch.commit();
     await mergeMyInventory(ref.id);
-    toast(`가족을 만들었어요. 초대 코드는 ${code}예요.`);
+    toast(`Family를 만들었어요. 초대 코드는 ${code}예요.`);
   } catch (e) { fail(e); }
 }
 
@@ -1613,26 +1613,26 @@ async function joinFamily() {
     const fid = c.data().familyId;
     await updateDoc(doc(db, "families", fid), { members: arrayUnion(uid), [`names.${uid}`]: myName(), joinCode: code });
     await mergeMyInventory(fid);
-    toast("가족에 들어왔어요. 내 재고도 가족 재고에 합쳤어요.");
+    toast("Family에 들어왔어요. 내 재고도 Family 재고에 합쳤어요.");
   } catch (e) { fail(e); }
 }
 
 async function leaveFamily() {
   if (!state.family) return;
-  if (!confirm("가족에서 나갈까요? 가족 재고는 가족에게 남고, 내 재고는 비어 있는 상태로 시작해요.")) return;
+  if (!confirm("Family에서 나갈까요? Family 재고는 Family에 남고, 내 재고는 비어 있는 상태로 시작해요.")) return;
   const uid = state.user.uid;
   const fid = state.family.id;
   try {
     await deleteDoc(doc(db, "families", fid, "status", uid)).catch(() => {});
     await updateDoc(doc(db, "families", fid), { members: arrayRemove(uid), [`names.${uid}`]: deleteField() });
-    toast("가족에서 나왔어요.");
+    toast("Family에서 나왔어요.");
   } catch (e) { fail(e); }
 }
 
 async function copyFamilyCode(share) {
   const code = state.family && state.family.code;
   if (!code) return;
-  const text = `영양제 스케줄러 가족 초대 코드: ${code}\n${location.origin}`;
+  const text = `Vitaday Family 초대 코드: ${code}\n${location.origin}`;
   try {
     if (share && navigator.share) { await navigator.share({ text }); return; }
     await navigator.clipboard.writeText(code);
@@ -1708,7 +1708,7 @@ function renderAll() {
   renderInventory();
   renderFamilyToday();
   $("#invHint").textContent = state.family
-    ? `${state.family.name || "가족"} 재고예요. 가족 누가 완료를 눌러도 같이 줄어들어요. 새로 산 통은 "새 통 추가"로 더하세요.`
+    ? `${state.family.name || "Family"} 재고예요. Family 누가 완료를 눌러도 같이 줄어들어요. 새로 산 통은 "새 통 추가"로 더하세요.`
     : `오늘 탭에서 완료를 누르면 그만큼 줄어들어요. 새로 산 통은 "새 통 추가"로 더하세요.`;
   publishStatus();
   if (admin) renderAdmin();

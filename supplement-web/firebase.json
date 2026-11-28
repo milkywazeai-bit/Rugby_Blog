@@ -1,25 +1,66 @@
 {
-  "hosting": {
-    "site": "supplement-scheduler-kr",
-    "public": "public",
-    "ignore": ["firebase.json", "**/.*"],
-    "headers": [
-      { "source": "**/*.@(js|css|html|webmanifest)", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] },
-      { "source": "**", "headers": [
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
-      ] }
-    ]
-  },
+  "hosting": [
+    {
+      "site": "vitaday",
+      "public": "public",
+      "ignore": [
+        "firebase.json",
+        "**/.*"
+      ],
+      "headers": [
+        {
+          "source": "**/*.@(js|css|html|webmanifest)",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "no-cache"
+            }
+          ]
+        },
+        {
+          "source": "**",
+          "headers": [
+            {
+              "key": "X-Content-Type-Options",
+              "value": "nosniff"
+            },
+            {
+              "key": "Referrer-Policy",
+              "value": "strict-origin-when-cross-origin"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "site": "supplement-scheduler-kr",
+      "public": "redirect",
+      "redirects": [
+        {
+          "regex": "^/(.*)$",
+          "destination": "https://vitaday.web.app/:1",
+          "type": 301
+        }
+      ]
+    }
+  ],
   "firestore": {
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
   },
   "emulators": {
-    "auth": { "port": 9099 },
-    "firestore": { "port": 8080 },
-    "hosting": { "port": 5000 },
-    "ui": { "enabled": false },
+    "auth": {
+      "port": 9099
+    },
+    "firestore": {
+      "port": 8080
+    },
+    "hosting": {
+      "port": 5000
+    },
+    "ui": {
+      "enabled": false
+    },
     "singleProjectMode": true
   }
 }

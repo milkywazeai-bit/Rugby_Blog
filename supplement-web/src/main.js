@@ -1821,8 +1821,15 @@ function renderAll() {
   renderMe();
 }
 
-function switchTab(tab) {
+// Phone back key: each tab change and each open sheet is a history entry, so
+// back closes the sheet or returns to the previous tab like a native app.
+let navStarted = false;
+function switchTab(tab, opts = {}) {
   if (!TABS.includes(tab)) tab = "today";
+  if (!opts.fromHistory) {
+    if (!navStarted) { history.replaceState({ tab }, ""); navStarted = true; }
+    else if (tab !== state.tab || (history.state && history.state.sheet)) history.pushState({ tab }, "");
+  }
   state.tab = tab;
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
   document.querySelectorAll(".panel").forEach((p) => { p.hidden = p.dataset.panel !== tab; });
@@ -1834,12 +1841,16 @@ function switchTab(tab) {
 
 // ---------- sheets ----------
 function openSheet(title, html) {
+  if ($("#scrim").hidden) history.pushState({ tab: state.tab, sheet: true }, "");
   $("#sheetTitle").textContent = title;
   $("#sheetBody").innerHTML = html;
   $("#scrim").hidden = false;
   document.body.classList.add("sheet-open");
 }
+let skipPop = 0;
 function closeSheet() {
+  // Closed by a button (not the back key): drop the sheet's history entry too.
+  if (!$("#scrim").hidden && history.state && history.state.sheet) { skipPop++; history.back(); }
   draftPlan = null;
   setDraft = null;
   restock = null;
@@ -2343,6 +2354,15 @@ function wire() {
     signInTestUser(sub, email, name).catch(fail);
   }));
   document.querySelectorAll(".tab-btn").forEach((b) => b.addEventListener("click", () => switchTab(b.dataset.tab)));
+  window.addEventListener("popstate", (e) => {
+    if (skipPop > 0) { skipPop--; return; }
+    if (!state.user) return;
+    if (!$("#scrim").hidden) { closeSheet(); return; }
+    const st = e.state || {};
+    // A sheet that was already closed by its own buttons left an entry behind: skip it.
+    if (st.sheet) { history.back(); return; }
+    switchTab(st.tab || "today", { fromHistory: true });
+  });
   $("#importOpen").addEventListener("click", openImportSheet);
   $("#shotOpen").addEventListener("click", openShotSheet);
   $("#familyCard").addEventListener("click", (e) => {
@@ -2494,7 +2514,8 @@ function boot() {
     migrated = false;
     if (!user) { closeSheet(); showScreen("screenLogin"); return; }
     showScreen("screenApp");
-    switchTab(state.tab);
+    switchTab(state.tab, { fromHistory: navStarted });
+    if (!navStarted) { history.replaceState({ tab: state.tab }, ""); navStarted = true; }
     subscribe(user.uid);
   });
   setInterval(checkReminders, 20000);

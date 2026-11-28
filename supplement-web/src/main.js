@@ -352,7 +352,7 @@ function renderProducts() {
     box.innerHTML = `<div class="empty">"${esc(state.productQuery)}"에 맞는 제품이 없어요.</div>`;
     return;
   }
-  box.innerHTML = list.map((p) => {
+  const card = (p) => {
     const mine = state.items.some((it) => it.productId === p.id);
     return `<article class="pcard">
       ${thumbHtml(p.name, isSafePhoto(p.photo) ? p.photo : null, "pphoto")}
@@ -367,7 +367,31 @@ function renderProducts() {
         </div>
       </div>
     </article>`;
-  }).join("");
+  };
+  // 유산균 사이클 products by cycle (1, 2, 3 and the 4번 base set), then everything else.
+  const plan = state.plan || defaultPlan();
+  const groups = plan.methods.map((m, i) => ({
+    key: `m${i}`, label: `사이클 ${i + 1}`, sub: m.title !== `사이클 ${i + 1}` ? m.title : m.subtitle || "",
+    ids: new Set([...m.lunch, ...m.dinner].flatMap((s) => slotOptions(s).flat()))
+  }));
+  groups.push({ key: "base", label: plan.base?.title || "4번 사이클", sub: plan.base?.subtitle || "",
+    ids: new Set(baseSlots(plan).flatMap((s) => slotOptions(s).flat())) });
+  const placed = new Set();
+  const sections = groups.map((g) => {
+    const ps = list.filter((p) => g.ids.has(p.id) && !placed.has(p.id));
+    ps.forEach((p) => placed.add(p.id));
+    return { ...g, ps };
+  });
+  const rest = list.filter((p) => !placed.has(p.id));
+  const searching = !!q;
+  const fold = (key, head, ps) => ps.length
+    ? `<details class="pgroup" ${searching ? `data-fold="${esc(key)}" open` : foldAttrs(key)}>
+        <summary class="pgroup-head">${head}<span class="chip">${ps.length}</span><span class="fold-icon" aria-hidden="true"></span></summary>
+        <div class="pgrid">${ps.map(card).join("")}</div></details>`
+    : "";
+  const cycleHtml = sections.map((g) => fold(`pg:${g.key}`, `<strong>${esc(g.label)}</strong>${g.sub ? `<span class="mc-sub">${esc(g.sub)}</span>` : ""}`, g.ps)).join("");
+  box.innerHTML = (cycleHtml ? `<h3 class="sub-head">유산균 사이클 제품</h3>${cycleHtml}` : "")
+    + (rest.length ? `<h3 class="sub-head">그 외 제품</h3>${fold("pg:rest", `<strong>추가 영양제용</strong>`, rest)}` : "");
 }
 
 // ---------- probiotic cycles ----------
@@ -1331,14 +1355,18 @@ function setItemText(it) {
   return parts.join(" · ");
 }
 
-function setCard(s, actions) {
+// Folded to the title; tap to open. Open/closed survives re-renders (openFolds).
+const openFolds = new Set();
+function foldAttrs(key) { return `data-fold="${esc(key)}"${openFolds.has(key) ? " open" : ""}`; }
+
+function setCard(s, actions, where = "x") {
   const items = s.items || [];
-  return `<article class="set-card">
-    <div class="set-head"><strong>${esc(s.title)}</strong><span class="chip">${items.length}가지</span></div>
+  return `<details class="set-card" ${foldAttrs(`set:${where}:${s.id}`)}>
+    <summary class="set-head"><strong>${esc(s.title)}</strong><span class="chip">${items.length}가지</span><span class="fold-icon" aria-hidden="true"></span></summary>
     ${s.note ? `<p class="set-note">${esc(s.note)}</p>` : ""}
     <div class="set-items">${items.map((it) => `<div class="set-line">${productRow(it.productId)}<span class="set-dose">${esc(setItemText(it))}</span></div>`).join("")}</div>
     ${actions}
-  </article>`;
+  </details>`;
 }
 
 function renderAdmin() {
@@ -1348,7 +1376,7 @@ function renderAdmin() {
   renderProducts();
   const box = $("#setAdminList");
   box.innerHTML = state.sets.length
-    ? state.sets.map((s) => setCard(s, `<div class="set-actions"><button type="button" class="btn-small" data-set-edit="${esc(s.id)}">수정</button></div>`)).join("")
+    ? state.sets.map((s) => setCard(s, `<div class="set-actions"><button type="button" class="btn-small" data-set-edit="${esc(s.id)}">수정</button></div>`, "admin")).join("")
     : `<div class="empty"><strong>아직 상황별 세트가 없어요.</strong><span>"+ 새 세트"로 운동 전 부스터처럼 같이 먹는 제품 묶음을 만들면, 사용자가 추가 영양제 탭에서 한 번에 등록할 수 있어요.</span></div>`;
 }
 
@@ -1458,7 +1486,7 @@ function renderSetOffers() {
   box.innerHTML = `<h3 class="sub-head">상황별 세트</h3><p class="hint">상황에 맞게 같이 먹는 조합이에요. 한 번에 추가 영양제로 넣을 수 있어요.</p>` +
     state.sets.map((s) => {
       const all = (s.items || []).length && (s.items || []).every((it) => mine.has(it.productId));
-      return setCard(s, `<div class="set-actions">${all ? `<span class="chip taken">모두 추가됨</span>` : ""}<button type="button" class="${all ? "btn-small" : "btn-small primary"}" data-set-use="${esc(s.id)}">${all ? "다시 보기" : "이 세트 한 번에 추가"}</button></div>`);
+      return setCard(s, `<div class="set-actions">${all ? `<span class="chip taken">모두 추가됨</span>` : ""}<button type="button" class="${all ? "btn-small" : "btn-small primary"}" data-set-use="${esc(s.id)}">${all ? "다시 보기" : "이 세트 한 번에 추가"}</button></div>`, "offer");
     }).join("");
 }
 
@@ -2287,6 +2315,11 @@ function wire() {
   document.addEventListener("change", (e) => {
     if (e.target.matches && e.target.matches("[data-meal-time]")) saveMealTime(e.target);
   });
+  document.addEventListener("toggle", (e) => {
+    const key = e.target.dataset && e.target.dataset.fold;
+    if (!key || $("#productSearch").value.trim()) return;
+    if (e.target.open) openFolds.add(key); else openFolds.delete(key);
+  }, true);
 
   document.addEventListener("click", (e) => {
     if (handleEditorClick(e) || handleSetupClick(e) || handleRestockClick(e) || handleSetClick(e)) return;

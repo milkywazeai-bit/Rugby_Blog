@@ -1,5 +1,5 @@
 import { build } from "esbuild";
-import { mkdirSync, copyFileSync } from "fs";
+import { mkdirSync, copyFileSync, cpSync } from "fs";
 
 await build({
   entryPoints: ["src/main.js"],
@@ -26,3 +26,10 @@ const ocr = {
 mkdirSync("public/ocr/core", { recursive: true });
 mkdirSync("public/ocr/lang", { recursive: true });
 for (const [to, from] of Object.entries(ocr)) copyFileSync(from, to);
+
+// Pretendard (an SF Pro / Apple SD Gothic Neo look-alike), served from our site.
+// The browser fetches only the slices of Korean it needs.
+const pd = "node_modules/pretendard/dist/web/variable/";
+mkdirSync("public/fonts/pretendard", { recursive: true });
+copyFileSync(pd + "pretendardvariable-dynamic-subset.css", "public/fonts/pretendard/pretendardvariable-dynamic-subset.css");
+cpSync(pd + "woff2-dynamic-subset", "public/fonts/pretendard/woff2-dynamic-subset", { recursive: true });

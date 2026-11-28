@@ -4,3 +4,4 @@ public/app.js
 .firebase/
 service-account*.json
 public/ocr/
+public/fonts/

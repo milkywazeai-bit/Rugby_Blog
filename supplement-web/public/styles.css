@@ -5,9 +5,9 @@
   --warn:#9A6619; --warn-soft:#F3E5CB; --danger:#A24632; --danger-soft:#F2DFD8;
   --shadow:0 1px 2px rgba(24,34,27,.06),0 10px 28px -14px rgba(24,34,27,.28);
   --radius-card:18px; --radius-pill:999px;
-  --font-display:'Noto Serif KR','Nanum Myeongjo',serif;
-  --font-body:'IBM Plex Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif;
-  --font-mono:'IBM Plex Mono',ui-monospace,'SFMono-Regular',monospace;
+  --font-body:'Pretendard Variable',Pretendard,-apple-system,BlinkMacSystemFont,system-ui,'Apple SD Gothic Neo','Malgun Gothic',sans-serif;
+  --font-display:var(--font-body);
+  --font-mono:var(--font-body);
   color-scheme:light;
 }
 @media (prefers-color-scheme: dark){
@@ -392,3 +392,16 @@ button.item-body{cursor:pointer}
 .fam-code{display:flex;align-items:center;gap:8px;margin:8px 0}
 .fam-code span{font-family:var(--font-mono);font-size:1.3rem;font-weight:700;letter-spacing:.18em;color:var(--accent);flex:1}
 .chip.kind.family{background:#E2ECF6;color:#2F5C8A}
+
+/* Apple-style type: one family (Pretendard ≈ SF Pro + Apple SD Gothic Neo),
+   tight large titles, tabular numbers where mono used to be. */
+body{letter-spacing:-.011em;font-variant-numeric:tabular-nums}
+.brand h1{font-weight:800;font-size:1.8rem;letter-spacing:-.04em;line-height:1.1}
+.center-card h1{font-weight:800;font-size:2.4rem;letter-spacing:-.045em}
+.mc-title,.sheet h2,.set-head strong,.sub-head,.me-name{font-weight:700;letter-spacing:-.025em}
+.section-head .label{letter-spacing:-.01em;font-weight:700;font-size:.82rem;color:var(--ink)}
+.item-name{font-weight:600;letter-spacing:-.02em}
+.date,.me-email{letter-spacing:0}
+.ring-pct{font-weight:700;letter-spacing:-.03em}
+.inv-count{font-weight:700;letter-spacing:-.03em}
+.tab-btn span{letter-spacing:-.02em}

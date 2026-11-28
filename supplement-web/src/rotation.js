@@ -52,7 +52,7 @@ export function defaultPlan() {
       ], dinner: [] }
     ],
     base: {
-      title: "4번 사이클",
+      title: "사이클 4",
       subtitle: "기본 구성 · 사이클과 상관없이 계속",
       slots: [
         { label: "발효효소", options: [one(ENZYMES)], amount: "1캡슐", meals: ["lunch"] },

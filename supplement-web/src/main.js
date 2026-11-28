@@ -102,7 +102,9 @@ function renderLogin() {
 // ---------- today ----------
 // One list for the day: the running cycle, the base set (4번) and extra supplements.
 // "완료" takes the dose out of 재고; undo puts it back.
-const KIND_TAG = { cycle: "사이클", base: "4번", extra: "추가" };
+const KIND_TAG = { cycle: "사이클", base: "사이클 4", extra: "추가" };
+// Older data says "4번 사이클"; show every base set as 사이클 4 like the others (사이클 1-1 ...).
+function baseTitle(t) { return !t || /^4번( 사이클)?$/.test(t.trim()) ? "사이클 4" : t; }
 
 function invCount(pid) {
   const v = state.inventory[pid];
@@ -375,7 +377,7 @@ function renderProducts() {
     key: `m${i}`, label: `사이클 ${i + 1}`, sub: m.title !== `사이클 ${i + 1}` ? m.title : m.subtitle || "",
     ids: new Set([...m.lunch, ...m.dinner].flatMap((s) => slotOptions(s).flat()))
   }));
-  groups.push({ key: "base", label: plan.base?.title || "4번 사이클", sub: plan.base?.subtitle || "",
+  groups.push({ key: "base", label: baseTitle(plan.base?.title), sub: plan.base?.subtitle || "",
     ids: new Set(baseSlots(plan).flatMap((s) => slotOptions(s).flat())) });
   const placed = new Set();
   const sections = groups.map((g) => {
@@ -481,7 +483,7 @@ function renderRotation() {
     const canStart = !!plan || admin;
     $("#rotStart").hidden = !canStart;
     $("#rotEmptyText").textContent = canStart
-      ? "사이클과 4번 기본 구성을 고르면 오늘부터 시작돼요."
+      ? "사이클과 사이클 4(기본 구성)를 고르면 오늘부터 시작돼요."
       : "관리자가 아직 사이클 구성을 만들지 않았어요.";
     return;
   }
@@ -506,7 +508,7 @@ function renderRotation() {
   </div>
   ${base && (base.items || []).length ? `<div class="month-card base">
     <div class="mc-when">계속 먹는 기본 구성 <span class="cy-days">${fmtDay(base.startDay)}부터 · ${today - base.startDay + 1}일째</span></div>
-    <div class="mc-title">${esc(base.title || "4번 사이클")}${base.subtitle ? ` <span class="mc-sub">${esc(base.subtitle)}</span>` : ""}</div>
+    <div class="mc-title">${esc(baseTitle(base.title))}${base.subtitle ? ` <span class="mc-sub">${esc(base.subtitle)}</span>` : ""}</div>
     ${mealSections(base.items, use, cycle.stock, today)}
     <div class="cy-actions"><button class="btn-small" data-restock="" type="button">새 통 추가</button><button class="btn-small" data-meal-edit="base" type="button">먹는 방법</button></div>
   </div>` : ""}`;
@@ -517,7 +519,7 @@ function renderRotation() {
       <div class="mc-when">다음 사이클 미리보기 <span class="chip code">${n.methodIndex + 1}-${n.round}</span></div>
       <div class="mc-title">${esc(m.title)}${m.subtitle ? ` <span class="mc-sub">${esc(m.subtitle)}</span>` : ""}</div>
       ${["lunch", "dinner"].map((meal) => m[meal].length ? `<div class="meal"><div class="meal-head">${MEAL_NAMES[meal]} 먹고</div>${m[meal].map(slotHtml).join("")}</div>` : "").join("")}
-      ${base ? `<p class="mc-note">4번 기본 구성은 그대로 계속 먹어요.</p>` : ""}
+      ${base ? `<p class="mc-note">사이클 4는 그대로 계속 먹어요.</p>` : ""}
     </div>`;
   } else {
     $("#rotNext").innerHTML = "";
@@ -549,7 +551,7 @@ function openMealEdit(part) {
       return { ...r, meals: [...r.meals], skip: !cur };
     })
   };
-  openSheet(part === "base" ? "4번 먹는 방법" : "사이클 먹는 방법", `<div id="mealEdit"></div>`);
+  openSheet(part === "base" ? "사이클 4 먹는 방법" : "사이클 먹는 방법", `<div id="mealEdit"></div>`);
   renderMealEdit();
 }
 
@@ -690,7 +692,7 @@ function renderCycleSetup(keepScroll = true) {
   const scroll = keepScroll ? sheet.scrollTop : 0;
   const plan = state.plan;
   if (setup.step === 1) {
-    box.innerHTML = `<p class="hint">어떤 사이클로 시작할까요? 1 → 2 → 3 순서로 돌아가요.${setup.withBase ? " 다음 화면에서 계속 먹을 4번 기본 구성도 함께 정해요." : ""}</p>` +
+    box.innerHTML = `<p class="hint">어떤 사이클로 시작할까요? 1 → 2 → 3 순서로 돌아가요.${setup.withBase ? " 다음 화면에서 계속 먹을 사이클 4(기본 구성)도 함께 정해요." : ""}</p>` +
       plan.methods.map((m, i) => {
         const ids = [...new Set([...m.lunch, ...m.dinner].flatMap((s) => slotOptions(s).flat()))].slice(0, 8);
         const parts = ["lunch", "dinner"].filter((meal) => m[meal].length).map((meal) => `${MEAL_NAMES[meal]}: ${m[meal].map((s) => esc(s.label)).join(", ")}`);
@@ -713,10 +715,10 @@ function renderCycleSetup(keepScroll = true) {
       <button type="button" class="link-btn" data-cy-back>다른 사이클 고르기</button></div>
     ${["lunch", "dinner"].map((meal) => m[meal].length ? `<div class="meal"><div class="meal-head">${MEAL_NAMES[meal]} 먹고</div>${m[meal].map((s, i) => slotPicker(s, `${meal}:${i}`)).join("")}</div>` : "").join("")}
     ${setup.withBase && slots.length ? `<div class="base-block">
-      <div class="cy-setup-head"><span class="chip code">4</span><strong>${esc(plan.base.title || "4번 사이클")}</strong><span class="mc-sub">${esc(plan.base.subtitle || "")}</span></div>
+      <div class="cy-setup-head"><span class="chip code">4</span><strong>${esc(baseTitle(plan.base.title))}</strong><span class="mc-sub">${esc(plan.base.subtitle || "")}</span></div>
       <p class="hint">지금 한 번만 정하면 사이클이 바뀌어도 계속 먹어요.</p>
       ${slots.map((s, i) => slotPicker(s, `base:${i}`)).join("")}
-    </div>` : (state.cycle && state.cycle.base ? `<p class="mc-note">4번 기본 구성은 지금처럼 계속 먹어요.</p>` : "")}
+    </div>` : (state.cycle && state.cycle.base ? `<p class="mc-note">사이클 4는 지금처럼 계속 먹어요.</p>` : "")}
     <div class="meal"><div class="meal-head">지금 가지고 있는 개수</div>
       <p class="hint">이미 먹고 있던 제품은 남은 개수로 고쳐주세요. 새 통이면 그대로 두면 돼요.</p>
       ${pids.map((pid) => `<div class="cy-stock">${productRow(pid)}
@@ -771,7 +773,7 @@ async function confirmCycle() {
   const today = epochDay();
   const prev = state.cycle;
   const base = setup.withBase
-    ? { title: plan.base?.title || "4번 사이클", subtitle: plan.base?.subtitle || "", startDay: today, items: baseItemsFromPicks(baseSlots(plan), setup.picks) }
+    ? { title: baseTitle(plan.base?.title), subtitle: plan.base?.subtitle || "", startDay: today, items: baseItemsFromPicks(baseSlots(plan), setup.picks) }
     : prev.base;
   const stock = {};
   for (const pid of new Set([...items, ...(setup.withBase ? base.items : [])].map((it) => it.productId))) {
@@ -880,7 +882,7 @@ function renderRotationEditor() {
     <button type="button" class="rot-add" data-method-add>+ 사이클 추가</button>
     <section class="pm base" data-m="base">
       <div class="pm-head"><span class="chip code">4</span>
-        <input data-pb="title" value="${esc(draftPlan.base.title || "")}" placeholder="4번 사이클" aria-label="기본 구성 이름">
+        <input data-pb="title" value="${esc(draftPlan.base.title || "")}" placeholder="사이클 4" aria-label="기본 구성 이름">
         <input data-pb="subtitle" value="${esc(draftPlan.base.subtitle || "")}" placeholder="설명" aria-label="설명"></div>
       <p class="hint">처음 시작할 때 한 번 고르고, 사이클이 바뀌어도 계속 먹는 기본 구성이에요. 칸마다 먹는 때(점심·저녁)를 고르세요.</p>
       ${draftPlan.base.slots.map((slot, si) => slotEditor(slot, "base", "base", si)).join("")}
@@ -975,7 +977,7 @@ async function savePlan() {
   const plan = {
     methods: draftPlan.methods,
     base: {
-      title: (draftPlan.base.title || "").trim() || "4번 사이클",
+      title: (draftPlan.base.title || "").trim() || "사이클 4",
       subtitle: (draftPlan.base.subtitle || "").trim(),
       slots: draftPlan.base.slots.filter((s) => (s.label || "").trim() || s.options.length).map((s) => ({ ...clean(s), meals: s.meals }))
     }
@@ -999,7 +1001,7 @@ async function savePlan() {
 // ---------- 재고 (inventory) ----------
 // users/{uid}/inventory/{productId}.count is the real count: set when a cycle or extra
 // is set up, raised by "새 통 추가", lowered by "완료" in 오늘.
-const WHERE_TAG = { cycle: "유산균 사이클", base: "4번", extra: "추가 영양제", family: "Family" };
+const WHERE_TAG = { cycle: "유산균 사이클", base: "사이클 4", extra: "추가 영양제", family: "Family" };
 const LOW_DAYS = 10;
 
 function inventoryRows() {
@@ -1312,7 +1314,7 @@ function renderHistory() {
       <div class="hist-head"><strong>${esc(historyLabel(by, g.key))}</strong>
         <span class="hist-stats">${by === "day" ? "" : `${g.activeDays}일 먹음 · `}완료 ${g.taken}${g.skipped ? ` · 건너뜀 ${g.skipped}` : ""}</span></div>
       ${g.cycles.length ? `<div class="hist-cycles">${g.cycles.map((c) => `<span class="chip code">${esc(c.code)}</span><span class="hist-ctitle">${esc(c.title)}</span>`).join("")}</div>` : ""}
-      ${byKind.map(([k, list]) => `<div class="hist-kind"><span class="chip kind ${k}">${KIND_TAG[k] === "사이클" ? "유산균 사이클" : KIND_TAG[k] === "추가" ? "추가 영양제" : "4번"}</span>
+      ${byKind.map(([k, list]) => `<div class="hist-kind"><span class="chip kind ${k}">${KIND_TAG[k] === "사이클" ? "유산균 사이클" : KIND_TAG[k] === "추가" ? "추가 영양제" : "사이클 4"}</span>
         <span class="hist-prods">${list.map((p) => {
           const prod = p.productId ? productById(p.productId) : null;
           const name = prod ? prod.name : p.name || "이름 없음";
@@ -1356,7 +1358,7 @@ function renderExtras() {
 
 // Step 1: pick a product from the shared catalog.
 function openProductPicker() {
-  openSheet("제품 목록에서 고르기", `<input id="pickSearch" class="search" type="search" placeholder="제품명이나 브랜드로 찾기" aria-label="제품 검색"><p class="hint">유산균 사이클(4번 포함) 제품은 여기서 빠져 있어요. 유산균 사이클 탭에서 관리해요.</p><div id="pickList"></div>`);
+  openSheet("제품 목록에서 고르기", `<input id="pickSearch" class="search" type="search" placeholder="제품명이나 브랜드로 찾기" aria-label="제품 검색"><p class="hint">유산균 사이클(사이클 4 포함) 제품은 여기서 빠져 있어요. 유산균 사이클 탭에서 관리해요.</p><div id="pickList"></div>`);
   renderProductPicker("");
 }
 

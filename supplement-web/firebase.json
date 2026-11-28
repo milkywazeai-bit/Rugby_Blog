@@ -62,5 +62,18 @@
       "enabled": false
     },
     "singleProjectMode": true
+  },
+  "functions": {
+    "source": "functions",
+    "runtime": "nodejs22",
+    "ignore": [
+      "node_modules",
+      "src",
+      ".gitignore",
+      "*.log"
+    ],
+    "predeploy": [
+      "npm --prefix \"$RESOURCE_DIR/..\" run build"
+    ]
   }
 }

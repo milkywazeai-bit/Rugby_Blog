@@ -12,6 +12,18 @@ await build({
   logLevel: "info"
 });
 
+// Cloud Function (meal reminders), with the app's schedule logic bundled in.
+await build({
+  entryPoints: ["functions/src/index.js"],
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  target: "node22",
+  outfile: "functions/lib/index.js",
+  external: ["firebase-functions", "firebase-functions/*", "firebase-admin", "firebase-admin/*", "web-push"],
+  logLevel: "info"
+});
+
 // Screenshot reading (관리자 → 캡처로 추가) runs Tesseract in the browser. Its files are
 // served from our own site and only downloaded when an admin uses that feature.
 const ocr = {

@@ -8,3 +8,6 @@ export const firebaseConfig = {
   messagingSenderId: "467423713367",
   appId: "1:467423713367:web:3336d041b854a4bb63eb12"
 };
+
+// Web Push public key (the private half lives only on the server as a secret).
+export const vapidPublicKey = "BEpImsBVoRIOIWTvmjGuHlqHjuMyfiRLl5nA8i0kEkWPD2-1i5Tih2Pq91Z3Vz-JpOJWKxepkkL2ivaDa8bYRpM";

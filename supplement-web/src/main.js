@@ -7,6 +7,7 @@ import {
 } from "./firebase.js";
 import { parseIherbLinks, findUnsupportedLinks, iherbSearchUrl, describeAmount, isIherbUrl } from "./iherb.js";
 import { compressPhoto, isSafePhoto } from "./photo.js";
+import { vapidPublicKey } from "./config.js";
 import { parseShot, photoRect, matchProduct } from "./shot.js";
 import {
   defaultPlan, validPlan, methodIndexOf, nextCycle, dailyUse, remaining, cycleStatus, itemsFromPicks, defaultPicks,
@@ -1789,9 +1790,10 @@ function renderNotify() {
   const on = notifyOn();
   $("#notifyBtn").textContent = on ? "알림 끄기" : "알림 켜기";
   const t = mealTimes(state.settings);
+  const push = on && !!localStorage.getItem("push");
   $("#notifyState").textContent = on
-    ? `켜짐 — 아침 ${fmtTime(t.morning)} · 점심 ${fmtTime(t.lunch)} · 저녁 ${fmtTime(t.dinner)}에 아직 안 먹은 게 있으면 알려드려요.`
-    : "꺼짐";
+    ? `켜짐 — ${push ? "앱을 닫아도 " : "앱이 열려 있을 때 "}아침 ${fmtTime(t.morning)} · 점심 ${fmtTime(t.lunch)} · 저녁 ${fmtTime(t.dinner)}에 아직 안 먹은 게 있으면 알려드려요.`
+    : (isIos() && !isStandalone() ? "꺼짐 — 아이폰은 홈 화면에 추가한 앱에서 켤 수 있어요." : "꺼짐");
 }
 
 const TABS = ["today", "rotation", "extras", "inventory", "me", "products"];
@@ -2129,9 +2131,79 @@ async function handleShotFiles(files) {
   renderImportRows();
 }
 
+// ---------- 앱이 닫혀 있을 때 알림 (Web Push) ----------
+// The device subscribes with our public VAPID key; the server (Cloud Function)
+// pushes a reminder at each meal time when something is still not marked.
+function b64urlToBytes(s) {
+  const pad = "=".repeat((4 - (s.length % 4)) % 4);
+  const raw = atob((s + pad).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
+async function endpointId(endpoint) {
+  const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(endpoint));
+  return [...new Uint8Array(h)].slice(0, 16).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+function pushSupported() {
+  return !useEmulator && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+}
+function isIos() { return /iphone|ipad|ipod/i.test(navigator.userAgent); }
+function isStandalone() { return window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true; }
+
+async function enablePush() {
+  if (!pushSupported()) return false;
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64urlToBytes(vapidPublicKey) });
+  const j = sub.toJSON();
+  const id = await endpointId(j.endpoint);
+  const uid = state.user.uid;
+  await setDoc(doc(db, "users", uid, "push", id), {
+    endpoint: j.endpoint, keys: { p256dh: j.keys.p256dh, auth: j.keys.auth },
+    ua: navigator.userAgent.slice(0, 160), createdAt: serverTimestamp()
+  });
+  await setDoc(settingsRef(), { tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Seoul", updatedAt: serverTimestamp() }, { merge: true });
+  localStorage.setItem("push", id);
+  return true;
+}
+
+async function disablePush() {
+  const id = localStorage.getItem("push");
+  localStorage.removeItem("push");
+  try {
+    if (pushSupported()) {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) await sub.unsubscribe();
+    }
+  } catch { /* already gone */ }
+  if (id && state.user) await deleteDoc(doc(db, "users", state.user.uid, "push", id)).catch(() => {});
+}
+
+async function toggleNotify() {
+  if (!("Notification" in window)) { toast("이 브라우저는 알림을 지원하지 않아요."); return; }
+  if (isIos() && !isStandalone()) { toast("아이폰은 홈 화면에 추가한 Vitaday 앱에서만 알림을 켤 수 있어요."); return; }
+  if (localStorage.getItem("notify") === "1" && Notification.permission === "granted") {
+    localStorage.setItem("notify", "0");
+    await disablePush();
+    renderMe();
+    return;
+  }
+  const perm = await Notification.requestPermission();
+  localStorage.setItem("notify", perm === "granted" ? "1" : "0");
+  if (perm !== "granted") { toast("알림이 차단되어 있어요. 브라우저 설정에서 허용해주세요."); renderMe(); return; }
+  let push = false;
+  try { push = await enablePush(); } catch (e) { console.warn(e); }
+  renderMe();
+  showReminder("알림이 켜졌어요", push
+    ? "앱을 닫아도 아침·점심·저녁 복용 시간에 이렇게 알려드릴게요."
+    : "앱이 열려 있을 때 복용 시간에 알려드릴게요.", "notify-test");
+}
+
 // ---------- notifications (while the app is open) ----------
 function checkReminders() {
   if (!state.user || localStorage.getItem("notify") !== "1") return;
+  // The server sends these when this device is subscribed; don't notify twice.
+  if (localStorage.getItem("push")) return;
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   const now = new Date();
   const mins = now.getHours() * 60 + now.getMinutes();
@@ -2299,18 +2371,7 @@ function wire() {
     } catch (e) { fail(e); }
   });
 
-  $("#notifyBtn").addEventListener("click", async () => {
-    if (!("Notification" in window)) { toast("이 브라우저는 알림을 지원하지 않아요."); return; }
-    if (localStorage.getItem("notify") === "1" && Notification.permission === "granted") {
-      localStorage.setItem("notify", "0");
-    } else {
-      const perm = await Notification.requestPermission();
-      localStorage.setItem("notify", perm === "granted" ? "1" : "0");
-      if (perm !== "granted") toast("알림이 차단되어 있어요. 브라우저 설정에서 허용해주세요.");
-      else showReminder("알림이 켜졌어요", "아침·점심·저녁 복용 시간에 이렇게 알려드릴게요.", "notify-test");
-    }
-    renderMe();
-  });
+  $("#notifyBtn").addEventListener("click", () => { toggleNotify().catch(fail); });
 
   document.addEventListener("change", (e) => {
     if (e.target.matches && e.target.matches("[data-meal-time]")) saveMealTime(e.target);

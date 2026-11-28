@@ -537,7 +537,18 @@ function mealEditSource(part) {
 function openMealEdit(part) {
   if (!state.cycle) return;
   const src = mealEditSource(part);
-  mealEdit = { part, rows: mealPlanOf(src.items).map((r) => ({ ...r, meals: [...r.meals] })) };
+  // Every product of the admin default is listed; ones no longer in my items show as 빠짐.
+  const current = mealPlanOf(src.items);
+  const all = mealPlanOf(src.def || src.items);
+  for (const r of current) if (!all.some((a) => a.productId === r.productId)) all.push(r);
+  mealEdit = {
+    part,
+    rows: all.map((d) => {
+      const cur = current.find((r) => r.productId === d.productId);
+      const r = cur || d;
+      return { ...r, meals: [...r.meals], skip: !cur };
+    })
+  };
   openSheet(part === "base" ? "4번 먹는 방법" : "사이클 먹는 방법", `<div id="mealEdit"></div>`);
   renderMealEdit();
 }
@@ -547,12 +558,12 @@ function renderMealEdit() {
   if (!box || !mealEdit) return;
   const src = mealEditSource(mealEdit.part);
   box.innerHTML = `<p class="hint">제품마다 언제, 한 번에 몇 개씩 먹을지 정해요. <strong>나만</strong> 바뀌고 다른 사람은 관리자 기본값 그대로예요.</p>
-    ${mealEdit.rows.map((r, i) => `<div class="set-edit-row">
-      ${productRow(r.productId)}
-      <div class="set-edit-fields">
+    ${mealEdit.rows.map((r, i) => `<div class="set-edit-row${r.skip ? " skipped" : ""}">
+      <div class="set-line">${productRow(r.productId)}<button type="button" class="btn-small${r.skip ? " primary" : ""}" data-me-skip="${i}">${r.skip ? "다시 넣기" : "빼기"}</button></div>
+      ${r.skip ? `<p class="mc-note">안 먹어요 — 오늘 탭·재고·알림에서 빠져요.</p>` : `<div class="set-edit-fields">
         <div class="meal-pick small">${MEALS.map((m) => `<button type="button" class="set-meal ${r.meals.includes(m.key) ? "on" : ""}" data-me-meal="${i}" data-meal="${m.key}" aria-pressed="${r.meals.includes(m.key)}">${m.label}</button>`).join("")}</div>
         <label class="mini">한 번에 <input type="number" min="0.5" step="0.5" inputmode="decimal" data-me-dose="${i}" value="${esc(r.dose)}"> ${esc((r.amount || "").replace(/\d+(?:\.\d+)?/, "").trim() || unitOf(r.productId))}</label>
-      </div>
+      </div>`}
     </div>`).join("")}
     <div class="me-quick">
       <button type="button" class="btn-small" data-me-all="dinner">전부 저녁 한 번으로</button>
@@ -564,20 +575,24 @@ function renderMealEdit() {
 
 function handleMealEditClick(e) {
   if (!mealEdit) return false;
-  const t = e.target.closest("[data-me-meal],[data-me-all],[data-me-reset],#mealEditSave");
+  const t = e.target.closest("[data-me-meal],[data-me-all],[data-me-reset],[data-me-skip],#mealEditSave");
   if (!t) return false;
-  if (t.dataset.meMeal) {
+  if (t.dataset.meSkip) {
+    const r = mealEdit.rows[parseInt(t.dataset.meSkip, 10)];
+    r.skip = !r.skip;
+    renderMealEdit();
+  } else if (t.dataset.meMeal) {
     const r = mealEdit.rows[parseInt(t.dataset.meMeal, 10)];
     const on = r.meals.includes(t.dataset.meal);
     if (on && r.meals.length === 1) { toast("끼니를 하나 이상 골라주세요. 안 먹을 거면 사이클 설정에서 빼주세요."); return true; }
     r.meals = on ? r.meals.filter((m) => m !== t.dataset.meal) : [...r.meals, t.dataset.meal];
     renderMealEdit();
   } else if (t.dataset.meAll) {
-    mealEdit.rows.forEach((r) => { r.meals = [t.dataset.meAll]; });
+    mealEdit.rows.forEach((r) => { if (!r.skip) r.meals = [t.dataset.meAll]; });
     renderMealEdit();
   } else if ("meReset" in t.dataset) {
     const src = mealEditSource(mealEdit.part);
-    mealEdit.rows = mealPlanOf(src.def).map((r) => ({ ...r, meals: [...r.meals] }));
+    mealEdit.rows = mealPlanOf(src.def).map((r) => ({ ...r, meals: [...r.meals], skip: false }));
     renderMealEdit();
     toast("기본값으로 돌려놨어요. 저장을 눌러야 적용돼요.");
   } else if (t.id === "mealEditSave") saveMealEdit();
@@ -592,7 +607,9 @@ function handleMealEditInput(t) {
 
 async function saveMealEdit() {
   const c = state.cycle;
-  const items = itemsFromMealPlan(mealEdit.rows);
+  const kept = mealEdit.rows.filter((r) => !r.skip);
+  if (mealEdit.part === "cycle" && !kept.length) { toast("유산균 사이클 제품은 하나 이상 남겨주세요."); return; }
+  const items = itemsFromMealPlan(kept);
   const ref = doc(db, "users", state.user.uid, "meta", "cycle");
   try {
     if (mealEdit.part === "base") {

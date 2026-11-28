@@ -437,3 +437,5 @@ details[open] > summary .fold-icon{transform:rotate(-135deg) translateY(-1px)}
 
 /* 먹는 방법 */
 .me-quick{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 4px}
+.set-edit-row.skipped{opacity:.6;border-style:dashed}
+.set-edit-row.skipped .mc-note{margin:6px 2px 0}

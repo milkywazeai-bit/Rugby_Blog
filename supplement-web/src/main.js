@@ -1555,14 +1555,34 @@ function invDoc(pid) {
 }
 
 function myName() {
+  const nick = state.settings && typeof state.settings.nickname === "string" ? state.settings.nickname.trim() : "";
+  if (nick) return nick.slice(0, 20);
   const u = state.user;
   return (u.displayName || (u.email || "").split("@")[0] || "멤버").slice(0, 20);
+}
+
+async function saveNickname() {
+  const input = $("#nickInput");
+  const nick = (input.value || "").trim().slice(0, 20);
+  if (!nick) { toast("닉네임을 적어주세요."); input.focus(); return; }
+  const uid = state.user.uid;
+  try {
+    await setDoc(settingsRef(), { nickname: nick, updatedAt: serverTimestamp() }, { merge: true });
+    // Family members see it right away: on the member list and in their 오늘 tab.
+    if (state.family) {
+      await updateDoc(doc(db, "families", state.family.id), { [`names.${uid}`]: nick });
+      lastStatusJson = "";
+      publishStatus();
+    }
+    input.blur();
+    toast(`닉네임을 "${nick}"(으)로 정했어요.`);
+  } catch (e) { fail(e); }
 }
 
 function otherMembers() {
   if (!state.family) return [];
   return (state.family.members || []).filter((uid) => uid !== state.user.uid).map((uid) => ({
-    uid, name: (state.family.names || {})[uid] || "멤버", status: state.familyStatus[uid] || null
+    uid, name: (state.family.names || {})[uid] || (state.familyStatus[uid] && state.familyStatus[uid].name) || "멤버", status: state.familyStatus[uid] || null
   }));
 }
 
@@ -1745,7 +1765,10 @@ async function copyFamilyCode(share) {
 // ---------- me ----------
 function renderMe() {
   const u = state.user;
-  $("#meName").textContent = u.displayName || "이름 없음";
+  $("#meName").textContent = myName() || "이름 없음";
+  const nickInput = $("#nickInput");
+  if (document.activeElement !== nickInput) nickInput.value = (state.settings && state.settings.nickname) || "";
+  nickInput.placeholder = u.displayName ? `예: ${u.displayName.slice(0, 10)}` : "예: 엄마";
   $("#meEmail").textContent = u.email || "";
   const admin = isAdmin();
   const noAdmin = state.adminUids !== null && state.adminUids.length === 0;
@@ -2365,6 +2388,8 @@ function wire() {
   });
   $("#importOpen").addEventListener("click", openImportSheet);
   $("#shotOpen").addEventListener("click", openShotSheet);
+  $("#nickSave").addEventListener("click", saveNickname);
+  $("#nickInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); saveNickname(); } });
   $("#familyCard").addEventListener("click", (e) => {
     const t = e.target.closest("button");
     if (!t) return;

@@ -123,6 +123,11 @@ test("가족: invite code to join, shared inventory and status, outsiders kept o
   // an outsider still sees nothing
   await denied(getDoc(doc(third.db, "families", "fam1", "inventory", "p1")));
   await denied(getDocs(query(collection(third.db, "families"), where("members", "array-contains", owner.uid))));
+  // nickname: each member changes only their own
+  await updateDoc(doc(friend.db, "families", "fam1"), { [`names.${friend.uid}`]: "아빠" });
+  await denied(updateDoc(doc(friend.db, "families", "fam1"), { [`names.${owner.uid}`]: "바꿈" }));
+  await denied(updateDoc(doc(friend.db, "families", "fam1"), { [`names.${friend.uid}`]: "x".repeat(30) }));
+  assert.equal((await getDoc(doc(owner.db, "families", "fam1"))).data().names[friend.uid], "아빠");
   // a member cannot remove someone else, but can leave
   await denied(updateDoc(doc(friend.db, "families", "fam1"), { members: arrayRemove(owner.uid) }));
   await updateDoc(doc(friend.db, "families", "fam1"), { members: arrayRemove(friend.uid), [`names.${friend.uid}`]: deleteField() });

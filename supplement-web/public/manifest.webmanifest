@@ -1,7 +1,7 @@
 {
-  "name": "영양제 스케줄러",
-  "short_name": "영양제",
-  "description": "영양제 복용 일정, 재고, 유산균 로테이션 관리",
+  "name": "Vitaday",
+  "short_name": "Vitaday",
+  "description": "Vitaday — 영양제 복용 일정, 재고, 유산균 사이클 관리",
   "lang": "ko",
   "start_url": "./",
   "scope": "./",

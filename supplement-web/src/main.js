@@ -1177,7 +1177,7 @@ function renderProductPicker(q) {
       <span class="opt-text">${p.brand ? `<span class="opt-brand">${esc(p.brand)}</span>` : ""}<span class="opt-name">${esc(p.name)}</span><span class="opt-brand">${esc(describeAmount(p))}</span></span>
       ${mine.has(p.id) ? `<span class="chip taken">추가됨</span>` : ""}
     </button>`).join("")
-    : `<p class="mc-note">${query ? `"${esc(q)}"에 맞는 제품이 없어요.` : "제품 목록이 비어 있어요."}${isAdmin() ? " 제품 탭에서 추가할 수 있어요." : " 관리자에게 추가를 요청해주세요."}</p>`;
+    : `<p class="mc-note">${query ? `"${esc(q)}"에 맞는 제품이 없어요.` : "제품 목록이 비어 있어요."}${isAdmin() ? " 관리자 탭에서 추가할 수 있어요." : " 관리자에게 추가를 요청해주세요."}</p>`;
 }
 
 // Step 2: how much, when, which days, and how many are on hand.
@@ -1647,7 +1647,7 @@ function renderMe() {
   $("#meEmail").textContent = u.email || "";
   const admin = isAdmin();
   const noAdmin = state.adminUids !== null && state.adminUids.length === 0;
-  $("#meRole").textContent = admin ? "관리자 — 제품 탭에서 공용 제품 목록을 관리해요" : "";
+  $("#meRole").textContent = admin ? "관리자 — 관리자 탭에서 제품과 상황별 세트를 관리해요" : "";
   $("#claimAdmin").hidden = !noAdmin;
   renderLowStock();
   if (state.tab === "me") renderHistory();
